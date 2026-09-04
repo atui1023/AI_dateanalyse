@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 数据分析</title>
+<script src="https://cdn.staticfile.org/echarts/5.5.1/echarts.min.js"></script>
+<script>
+  // CDN 加载失败时回退到备用源
+  if (!window.echarts) {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"><\/script>');
+  }
+</script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Microsoft YaHei", sans-serif;
+    background: #f5f6f8;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: #fff;
+    padding: 14px 20px;
+    border-bottom: 1px solid #e5e6eb;
+    font-size: 16px;
+    font-weight: 600;
+    color: #1d2129;
+  }
+  header span { font-weight: 400; font-size: 13px; color: #86909c; margin-left: 10px; }
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .tip {
+    text-align: center;
+    color: #86909c;
+    font-size: 13px;
+    margin-top: 40px;
+    line-height: 2;
+  }
+  .msg { display: flex; }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: 78%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 15px;
+    line-height: 1.6;
+    word-break: break-word;
+  }
+  .msg.user .bubble { background: #165dff; color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+  .msg.assistant .bubble { background: #fff; color: #1d2129; border: 1px solid #e5e6eb; border-bottom-left-radius: 4px; }
+  .msg.assistant.error .bubble { background: #ffece8; border-color: #fdcdc5; color: #cb272d; }
+  .bubble p { white-space: pre-wrap; }
+  .bubble pre.code {
+    background: #1d2129;
+    color: #e5e6eb;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+    font-family: Consolas, "Courier New", monospace;
+  }
+  .result { margin-top: 10px; }
+  .result .label { font-size: 13px; font-weight: 600; color: #4e5969; margin-bottom: 6px; }
+  .result pre.stdout {
+    background: #f7f8fa;
+    border: 1px solid #e5e6eb;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin-bottom: 8px;
+    font-family: Consolas, "Courier New", monospace;
+  }
+  .result table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+    display: block;
+    overflow-x: auto;
+  }
+  .result th, .result td {
+    border: 1px solid #e5e6eb;
+    padding: 6px 10px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .result th { background: #f2f3f5; font-weight: 600; }
+  .result .err { color: #cb272d; font-size: 13px; }
+  .result .chart {
+    width: 100%;
+    min-width: 360px;
+    height: 340px;
+    margin: 4px 0 10px;
+  }
+  .cursor::after { content: "▋"; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* 已读取文件弹层（收在 📁 按钮里，不常驻占屏） */
+  .composer { position: relative; }
+  #filePopover {
+    display: none;
+    position: absolute;
+    left: 20px;
+    bottom: 78px;
+    width: 440px;
+    max-width: calc(100vw - 40px);
+    max-height: 50vh;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #e5e6eb;
+    border-radius: 12px;
+    box-shadow: 0 6px 24px rgba(29, 33, 41, 0.16);
+    padding: 12px;
+    z-index: 50;
+  }
+  #filePopover.show { display: block; }
+  #filePopover .bar-title { font-size: 12px; color: #86909c; margin-bottom: 8px; }
+  #filePopover .empty-tip { font-size: 13px; color: #86909c; padding: 10px 2px; }
+  #fileList { display: flex; flex-direction: column; gap: 8px; }
+  .folder-btn { position: relative; }
+  .count-badge {
+    display: none;
+    position: absolute;
+    top: -6px;
+    right: -7px;
+    background: #f53f3f;
+    color: #fff;
+    border-radius: 9px;
+    font-size: 11px;
+    line-height: 16px;
+    min-width: 16px;
+    height: 16px;
+    text-align: center;
+    padding: 0 4px;
+  }
+  .count-badge.show { display: inline-block; }
+  /* 文件卡片 */
+  .file-card {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    background: #f2f7ff;
+    border: 1px solid #bedaff;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    color: #1d2129;
+  }
+  .file-card .badge {
+    background: #165dff;
+    color: #fff;
+    border-radius: 6px;
+    padding: 1px 7px;
+    font-size: 12px;
+    font-family: Consolas, monospace;
+    font-weight: 600;
+  }
+  .file-card .icon { font-size: 16px; }
+  .file-card .fname { font-weight: 600; }
+  .file-card .meta { color: #4e5969; }
+  .file-card .spacer { flex: 1; }
+  .file-card button.remove {
+    border: none;
+    background: none;
+    color: #86909c;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 2px;
+  }
+  .file-card button.remove:hover { color: #cb272d; }
+  .file-card details { flex-basis: 100%; }
+  .file-card summary { cursor: pointer; color: #165dff; font-size: 12px; }
+  .file-card table {
+    border-collapse: collapse;
+    margin-top: 6px;
+    font-size: 12px;
+    background: #fff;
+  }
+  .file-card th, .file-card td { border: 1px solid #e5e6eb; padding: 3px 8px; white-space: nowrap; }
+  .file-card th { background: #f2f3f5; }
+
+  form {
+    display: flex;
+    gap: 10px;
+    padding: 14px 20px;
+    background: #fff;
+    border-top: 1px solid #e5e6eb;
+    align-items: flex-end;
+  }
+  .upload-btn {
+    background: #f2f3f5;
+    border: none;
+    border-radius: 10px;
+    width: 42px;
+    height: 42px;
+    font-size: 18px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .upload-btn:hover { background: #e5e6eb; }
+  textarea {
+    flex: 1;
+    resize: none;
+    border: 1px solid #e5e6eb;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 15px;
+    font-family: inherit;
+    line-height: 1.5;
+    max-height: 120px;
+    outline: none;
+  }
+  textarea:focus { border-color: #165dff; }
+  #sendBtn {
+    background: #165dff;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0 22px;
+    height: 42px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  #sendBtn:disabled { background: #94bfff; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<header>AI 数据分析助手<span>上传 CSV / Excel（最多 10 个），用自然语言提问</span></header>
+<div id="chat">
+  <div class="tip">
+    点击左下角 📎 上传数据文件（CSV / Excel），可一次选择多个文件（最多 10 个）<br>
+    📁 按钮可查看已读取的文件；然后用中文提问，例如：各区域销售额排名 / 对比两个文件的销售额
+  </div>
+</div>
+
+<div class="composer">
+  <div id="filePopover">
+    <div class="bar-title">已读取的数据文件（分析代码中对应 df1、df2……），点 ✕ 可移除：</div>
+    <div id="fileList"></div>
+  </div>
+
+  <form id="form">
+    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" multiple hidden>
+    <button type="button" class="upload-btn" id="uploadBtn" title="上传数据文件（可一次多选）">📎</button>
+    <button type="button" class="upload-btn folder-btn" id="folderBtn" title="查看已读取的文件">📁<span id="fileCount" class="count-badge">0</span></button>
+    <textarea id="input" rows="1" placeholder="输入你的问题，Enter 发送，Shift+Enter 换行"></textarea>
+    <button id="sendBtn" type="submit">发送</button>
+  </form>
+</div>
+
+<script>
+const chatEl = document.getElementById("chat");
+const formEl = document.getElementById("form");
+const inputEl = document.getElementById("input");
+const sendBtn = document.getElementById("sendBtn");
+const fileInput = document.getElementById("fileInput");
+const uploadBtn = document.getElementById("uploadBtn");
+const folderBtn = document.getElementById("folderBtn");
+const filePopover = document.getElementById("filePopover");
+const fileCountBadge = document.getElementById("fileCount");
+
+// 完整对话历史，每次请求都带给后端，模型就能记住上下文
+const messages = [];
+let sending = false;
+// 当前挂载的数据集列表：[{dataset_id, filename, summary}, ...]，顺序对应代码里的 df1、df2……
+let datasets = [];
+const MAX_DATASETS = 10;
+// 所有已渲染的 ECharts 实例，统一 resize
+const chartInstances = [];
+let chartSeq = 0;
+
+window.addEventListener("resize", () => {
+  for (const c of chartInstances) {
+    try { c.resize(); } catch (e) {}
+  }
+});
+
+// 轮询等待 ECharts CDN 加载完成（最多约 8 秒），避免弱网下 window.echarts 未定义
+async function waitForEcharts() {
+  for (let i = 0; i < 80; i++) {
+    if (window.echarts) return true;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return false;
+}
+
+async function renderChart(el, option) {
+  if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
+  if (!option || !option.series) return;
+  const ok = await waitForEcharts();
+  if (!ok) {
+    el.innerHTML = '<div class="err" style="padding:10px">图表库加载失败，请检查网络后刷新页面</div>';
+    return;
+  }
+  try {
+    const chart = echarts.init(el);
+    chart.setOption(option);
+    chartInstances.push(chart);
+  } catch (e) {
+    el.innerHTML = '<div class="err" style="padding:10px">图表渲染失败：' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+// 把回复文本中的 ```python 代码块渲染成 <pre>
+function formatMessage(text) {
+  const parts = text.split(/```(?:python)?\s*\n?([\s\S]*?)```/);
+  let html = "";
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      html += `<pre class="code">${escapeHtml(parts[i].trim())}</pre>`;
+    } else {
+      const t = parts[i].trim();
+      if (t) html += `<p>${escapeHtml(t)}</p>`;
+    }
+  }
+  return html;
+}
+
+function renderTable(table) {
+  let h = '<table><thead><tr>';
+  h += table.columns.map(c => `<th>${escapeHtml(c)}</th>`).join("");
+  h += "</tr></thead><tbody>";
+  for (const row of table.rows) {
+    h += "<tr>" + row.map(v => `<td>${escapeHtml(v)}</td>`).join("") + "</tr>";
+  }
+  h += "</tbody></table>";
+  if (table.truncated) h += '<div class="meta" style="font-size:12px;color:#86909c;margin-top:4px">仅显示前 200 行</div>';
+  return h;
+}
+
+function addBubble(role) {
+  const tip = chatEl.querySelector(".tip");
+  if (tip) tip.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  wrap.appendChild(bubble);
+  chatEl.appendChild(wrap);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return bubble;
+}
+
+function previewHtml(d) {
+  const s = d.summary;
+  if (!s.preview_rows.length) return "";
+  return `<details><summary>预览前 ${s.preview_rows.length} 行</summary><table><thead><tr>` +
+    s.preview_columns.map(c => `<th>${escapeHtml(c)}</th>`).join("") +
+    "</tr></thead><tbody>" +
+    s.preview_rows.map(r => "<tr>" + r.map(v => `<td>${escapeHtml(v)}</td>`).join("") + "</tr>").join("") +
+    "</tbody></table></details>";
+}
+
+function renderFilePopover() {
+  const listEl = document.getElementById("fileList");
+  fileCountBadge.textContent = datasets.length;
+  fileCountBadge.classList.toggle("show", datasets.length > 0);
+  if (!datasets.length) {
+    listEl.innerHTML = '<div class="empty-tip">还没有读取任何文件，点 📎 上传 CSV / Excel</div>';
+    return;
+  }
+  listEl.innerHTML = datasets.map((d, i) => `
+    <div class="file-card">
+      <span class="badge">df${i + 1}</span>
+      <span class="icon">📊</span>
+      <span class="fname">${escapeHtml(d.filename)}</span>
+      <span class="meta">${d.summary.rows} 行 × ${d.summary.cols} 列</span>
+      <span class="spacer"></span>
+      <button class="remove" data-id="${d.dataset_id}" title="移除文件">✕</button>
+      ${previewHtml(d)}
+    </div>`).join("");
+  listEl.querySelectorAll("button.remove").forEach(btn => {
+    btn.onclick = () => removeDataset(btn.dataset.id);
+  });
+}
+
+async function removeDataset(id) {
+  try {
+    await fetch("/datasets/" + encodeURIComponent(id), { method: "DELETE" });
+  } catch (e) { /* 后端删除失败也从前端列表移除 */ }
+  datasets = datasets.filter(d => d.dataset_id !== id);
+  renderFilePopover();
+}
+
+uploadBtn.onclick = () => fileInput.click();
+
+// 📁 文件夹按钮：切换已读取文件弹层
+folderBtn.onclick = (e) => {
+  e.stopPropagation();
+  renderFilePopover();
+  filePopover.classList.toggle("show");
+};
+// 点击弹层外部时关闭
+document.addEventListener("click", (e) => {
+  if (!filePopover.classList.contains("show")) return;
+  if (!filePopover.contains(e.target) && !folderBtn.contains(e.target)) {
+    filePopover.classList.remove("show");
+  }
+});
+
+fileInput.onchange = async () => {
+  const files = Array.from(fileInput.files);
+  if (!files.length) return;
+
+  const room = MAX_DATASETS - datasets.length;
+  const toUpload = files.slice(0, room);
+  const skipped = files.length - toUpload.length;
+
+  uploadBtn.disabled = true;
+  folderBtn.disabled = true;
+  uploadBtn.textContent = "…";
+
+  let okCount = 0;
+  const errors = [];
+  for (const file of toUpload) {
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const resp = await fetch("/upload", { method: "POST", body: fd });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "上传失败");
+      datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
+      okCount++;
+    } catch (e) {
+      errors.push(`${file.name}（${e.message}）`);
+    }
+  }
+
+  renderFilePopover();
+
+  // 汇总本次上传结果
+  const bubble = addBubble("assistant");
+  const lines = [];
+  if (okCount) lines.push(`成功加载 ${okCount} 个文件，当前共 ${datasets.length} 个（点 📁 查看）。`);
+  if (errors.length) lines.push("以下文件失败：" + errors.join("；"));
+  if (skipped > 0) lines.push(`已达 ${MAX_DATASETS} 个文件上限，${skipped} 个未上传，请先在 📁 中移除部分文件。`);
+  bubble.textContent = lines.join("\n");
+  if (errors.length || skipped > 0) bubble.parentElement.classList.add("error");
+
+  uploadBtn.disabled = false;
+  folderBtn.disabled = false;
+  uploadBtn.textContent = "📎";
+  fileInput.value = "";
+};
+
+async function send(text) {
+  sending = true;
+  sendBtn.disabled = true;
+
+  const prefix = datasets.length
+    ? `【数据文件：${datasets.map((d, i) => `df${i + 1}=${d.filename}`).join("，")}】\n`
+    : "";
+  messages.push({ role: "user", content: prefix + text });
+  addBubble("user").textContent = text;
+
+  const bubble = addBubble("assistant");
+  bubble.classList.add("cursor");
+
+  try {
+    const resp = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages, dataset_ids: datasets.map(d => d.dataset_id) }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let reply = "";
+    let resultHtml = "";
+    const pendingCharts = [];  // [{id, option}]
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        const dataStr = line.slice(6);
+        if (dataStr === "[DONE]") continue;
+        const payload = JSON.parse(dataStr);
+
+        if (payload.type === "content") {
+          reply += payload.content;
+          bubble.textContent = reply;  // 流式阶段按纯文本显示
+        } else if (payload.type === "result") {
+          resultHtml = '<div class="result">';
+          if (payload.stdout && payload.stdout.trim()) {
+            resultHtml += `<div class="label">分析结论</div><pre class="stdout">${escapeHtml(payload.stdout.trim())}</pre>`;
+          }
+          if (payload.chart && payload.chart.series) {
+            const cid = "chart_" + (++chartSeq);
+            pendingCharts.push({ id: cid, option: payload.chart });
+            resultHtml += `<div class="label">可视化图表</div><div class="chart" id="${cid}"></div>`;
+          }
+          if (payload.table) {
+            resultHtml += `<div class="label">结果表格</div>${renderTable(payload.table)}`;
+          }
+          if (payload.error) {
+            resultHtml += `<div class="err">⚠ ${escapeHtml(payload.error)}</div>`;
+          }
+          resultHtml += "</div>";
+        } else if (payload.type === "error") {
+          bubble.parentElement.classList.add("error");
+          reply = "出错了：" + payload.error;
+        }
+        chatEl.scrollTop = chatEl.scrollHeight;
+      }
+    }
+
+    // 流结束后，把整段回复格式化为 文本+代码块，并追加执行结果
+    bubble.classList.remove("cursor");
+    bubble.innerHTML = formatMessage(reply) + resultHtml;
+    messages.push({ role: "assistant", content: reply });
+    chatEl.scrollTop = chatEl.scrollHeight;
+    // DOM 挂载后再初始化图表（容器此时才有真实尺寸）
+    for (const c of pendingCharts) {
+      renderChart(document.getElementById(c.id), c.option);
+    }
+  } catch (e) {
+    bubble.classList.remove("cursor");
+    bubble.parentElement.classList.add("error");
+    bubble.textContent = "网络错误：" + e.message;
+  } finally {
+    sending = false;
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+
+formEl.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = inputEl.value.trim();
+  if (!text || sending) return;
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  send(text);
+});
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    formEl.requestSubmit();
+  }
+});
+
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+});
+</script>
+</body>
+</html>

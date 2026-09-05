@@ -129,6 +129,8 @@
   #filePopover.show { display: block; }
   #filePopover .bar-title { font-size: 12px; color: #86909c; margin-bottom: 8px; }
   #filePopover .empty-tip { font-size: 13px; color: #86909c; padding: 10px 2px; }
+  #filePopover .section-title { font-size: 12px; color: #4e5969; font-weight: 600; margin: 12px 0 6px; padding-bottom: 4px; border-bottom: 1px dashed #e5e6eb; }
+  #fileList > .section-title:first-child { margin-top: 0; }
   #fileList { display: flex; flex-direction: column; gap: 8px; }
   .folder-btn { position: relative; }
   .count-badge {
@@ -147,6 +149,39 @@
     padding: 0 4px;
   }
   .count-badge.show { display: inline-block; }
+  /* 模式切换（圆形按钮，与上传/文件夹按钮同风格） */
+  #modeBar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 20px;
+    background: #fff;
+    border-top: 1px solid #e5e6eb;
+  }
+  .mode-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 1px solid #e5e6eb;
+    background: #f2f3f5;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .mode-btn:hover { background: #e5e6eb; }
+  .mode-btn.active {
+    background: #e8f3ff;
+    border-color: #165dff;
+    box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.15);
+  }
+  #modeLabel { font-size: 13px; font-weight: 600; color: #4e5969; }
+  /* RAG 引用来源 */
+  .sources { margin-top: 10px; border-top: 1px dashed #e5e6eb; padding-top: 8px; }
+  .sources .label { font-size: 12px; font-weight: 600; color: #4e5969; margin-bottom: 4px; }
+  .sources details { margin-top: 4px; font-size: 12px; }
+  .sources summary { cursor: pointer; color: #165dff; }
+  .sources p { color: #4e5969; margin-top: 4px; line-height: 1.5; white-space: pre-wrap; }
   /* 文件卡片 */
   .file-card {
     display: flex;
@@ -169,6 +204,7 @@
     font-family: Consolas, monospace;
     font-weight: 600;
   }
+  .file-card .badge.kb { background: #00b42a; }
   .file-card .icon { font-size: 16px; }
   .file-card .fname { font-weight: 600; }
   .file-card .meta { color: #4e5969; }
@@ -239,24 +275,30 @@
 </style>
 </head>
 <body>
-<header>AI 数据分析助手<span>上传 CSV / Excel（最多 10 个），用自然语言提问</span></header>
+<header>AI 数据分析助手<span>📊 表格数据分析 · 📚 文档知识库问答</span></header>
 <div id="chat">
-  <div class="tip">
+  <div class="tip" id="tipText">
     点击左下角 📎 上传数据文件（CSV / Excel），可一次选择多个文件（最多 10 个）<br>
-    📁 按钮可查看已读取的文件；然后用中文提问，例如：各区域销售额排名 / 对比两个文件的销售额
+    📁 按钮可查看已读取的文件；然后用中文提问，例如：各区域销售额排名 / 对比两个文件的销售额<br>
+    上传 TXT / MD / PDF 会自动存入<b>永久知识库</b>（重启不丢），分析时会自动参考其中的业务规则与指标口径
   </div>
+</div>
+
+<div id="modeBar">
+  <button class="mode-btn active" data-mode="analysis">📊 数据分析</button>
+  <button class="mode-btn" data-mode="rag">📚 知识库问答</button>
 </div>
 
 <div class="composer">
   <div id="filePopover">
-    <div class="bar-title">已读取的数据文件（分析代码中对应 df1、df2……），点 ✕ 可移除：</div>
+    <div class="bar-title" id="popoverTitle">📁 文件管理（临时文件 + 永久知识库）：</div>
     <div id="fileList"></div>
   </div>
 
   <form id="form">
-    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" multiple hidden>
-    <button type="button" class="upload-btn" id="uploadBtn" title="上传数据文件（可一次多选）">📎</button>
-    <button type="button" class="upload-btn folder-btn" id="folderBtn" title="查看已读取的文件">📁<span id="fileCount" class="count-badge">0</span></button>
+    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.txt,.md,.pdf" multiple hidden>
+    <button type="button" class="upload-btn" id="uploadBtn" title="上传数据文件或知识库文档（可一次多选）">📎</button>
+    <button type="button" class="upload-btn folder-btn" id="folderBtn" title="查看已读取的文件/文档">📁<span id="fileCount" class="count-badge">0</span></button>
     <textarea id="input" rows="1" placeholder="输入你的问题，Enter 发送，Shift+Enter 换行"></textarea>
     <button id="sendBtn" type="submit">发送</button>
   </form>
@@ -272,6 +314,9 @@ const uploadBtn = document.getElementById("uploadBtn");
 const folderBtn = document.getElementById("folderBtn");
 const filePopover = document.getElementById("filePopover");
 const fileCountBadge = document.getElementById("fileCount");
+const modeBar = document.getElementById("modeBar");
+const modeLabel = document.getElementById("modeLabel");
+const tipText = document.getElementById("tipText");
 
 // 完整对话历史，每次请求都带给后端，模型就能记住上下文
 const messages = [];
@@ -279,6 +324,16 @@ let sending = false;
 // 当前挂载的数据集列表：[{dataset_id, filename, summary}, ...]，顺序对应代码里的 df1、df2……
 let datasets = [];
 const MAX_DATASETS = 10;
+// 知识库（RAG）模式状态
+let mode = "analysis";   // analysis=数据分析 / rag=知识库问答
+let kbDocs = [];         // 已入库文档：[{doc_id, filename, chunks}, ...]
+let kbLoaded = false;    // 是否已拉取过知识库文档列表
+const MAX_KB_DOCS = 10;
+
+const MODE_TIPS = {
+  analysis: document.getElementById("tipText").innerHTML,
+  rag: "点击左下角 📎 上传 TXT / MD / PDF / CSV 文档入库（最多 10 个，永久保存）<br>📁 按钮可查看已入库的文档；提问示例：报销制度对住宿有什么规定 / 文档里的违约金怎么算",
+};
 // 所有已渲染的 ECharts 实例，统一 resize
 const chartInstances = [];
 let chartSeq = 0;
@@ -373,24 +428,46 @@ function previewHtml(d) {
 
 function renderFilePopover() {
   const listEl = document.getElementById("fileList");
-  fileCountBadge.textContent = datasets.length;
-  fileCountBadge.classList.toggle("show", datasets.length > 0);
-  if (!datasets.length) {
-    listEl.innerHTML = '<div class="empty-tip">还没有读取任何文件，点 📎 上传 CSV / Excel</div>';
-    return;
+  // 📁 角标 = 临时文件数 + 永久知识库文档数
+  fileCountBadge.textContent = datasets.length + kbDocs.length;
+  fileCountBadge.classList.toggle("show", datasets.length + kbDocs.length > 0);
+
+  // —— 分区一：临时文件（本次会话，刷新后清空）——
+  let html = '<div class="section-title">⏳ 临时文件 · 本次会话（分析代码中对应 df1、df2……，刷新页面后清空）</div>';
+  if (datasets.length) {
+    html += datasets.map((d, i) => `
+      <div class="file-card">
+        <span class="badge">df${i + 1}</span>
+        <span class="icon">📊</span>
+        <span class="fname">${escapeHtml(d.filename)}</span>
+        <span class="meta">${d.summary.rows} 行 × ${d.summary.cols} 列</span>
+        <span class="spacer"></span>
+        <button class="remove" data-kind="ds" data-id="${d.dataset_id}" title="移除文件">✕</button>
+        ${previewHtml(d)}
+      </div>`).join("");
+  } else {
+    html += '<div class="empty-tip">还没有临时文件，点 📎 上传 CSV / Excel</div>';
   }
-  listEl.innerHTML = datasets.map((d, i) => `
-    <div class="file-card">
-      <span class="badge">df${i + 1}</span>
-      <span class="icon">📊</span>
-      <span class="fname">${escapeHtml(d.filename)}</span>
-      <span class="meta">${d.summary.rows} 行 × ${d.summary.cols} 列</span>
-      <span class="spacer"></span>
-      <button class="remove" data-id="${d.dataset_id}" title="移除文件">✕</button>
-      ${previewHtml(d)}
-    </div>`).join("");
+
+  // —— 分区二：永久知识库（持久保存，重启不丢）——
+  html += '<div class="section-title">💾 永久知识库 · 长期保存（重启不丢，问答与分析都会自动参考）</div>';
+  if (kbDocs.length) {
+    html += kbDocs.map(d => `
+      <div class="file-card">
+        <span class="badge kb">📚</span>
+        <span class="icon">📄</span>
+        <span class="fname">${escapeHtml(d.filename)}</span>
+        <span class="meta">${d.chunks} 段</span>
+        <span class="spacer"></span>
+        <button class="remove" data-kind="kb" data-id="${d.doc_id}" title="从知识库彻底删除">✕</button>
+      </div>`).join("");
+  } else {
+    html += '<div class="empty-tip">知识库为空，点 📎 上传 TXT / MD / PDF / CSV 永久入库</div>';
+  }
+
+  listEl.innerHTML = html;
   listEl.querySelectorAll("button.remove").forEach(btn => {
-    btn.onclick = () => removeDataset(btn.dataset.id);
+    btn.onclick = () => (btn.dataset.kind === "ds" ? removeDataset(btn.dataset.id) : removeKbDoc(btn.dataset.id));
   });
 }
 
@@ -402,12 +479,50 @@ async function removeDataset(id) {
   renderFilePopover();
 }
 
+async function removeKbDoc(id) {
+  try {
+    await fetch("/kb/documents/" + encodeURIComponent(id), { method: "DELETE" });
+  } catch (e) { /* 同上 */ }
+  kbDocs = kbDocs.filter(d => d.doc_id !== id);
+  renderFilePopover();
+}
+
+// 模式切换：数据分析 / 知识库问答
+function setMode(m) {
+  if (mode === m) return;
+  mode = m;
+  modeBar.querySelectorAll(".mode-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === m));
+  modeLabel.textContent = m === "rag" ? "知识库问答模式" : "数据分析模式";
+  tipText.innerHTML = MODE_TIPS[m];
+  inputEl.placeholder = m === "rag"
+    ? "就文档内容提问，例如：制度里对住宿是怎么规定的"
+    : "输入你的问题，Enter 发送，Shift+Enter 换行";
+  if (m === "rag" && !kbLoaded) loadKbDocs();
+  renderFilePopover();
+}
+
+modeBar.querySelectorAll(".mode-btn").forEach(b => {
+  b.onclick = () => setMode(b.dataset.mode);
+});
+
+async function loadKbDocs() {
+  try {
+    const resp = await fetch("/kb/documents");
+    if (resp.ok) kbDocs = await resp.json();
+    kbLoaded = true;
+  } catch (e) { /* 下次再试 */ }
+  renderFilePopover();
+}
+
+// 页面一打开就拉取永久知识库列表：重启/刷新后已入库文档立即显示在 📁 弹层里
+loadKbDocs();
+
 uploadBtn.onclick = () => fileInput.click();
 
-// 📁 文件夹按钮：切换已读取文件弹层
+// 📁 文件夹按钮：打开文件管理弹层（同时刷新永久知识库列表）
 folderBtn.onclick = (e) => {
   e.stopPropagation();
-  renderFilePopover();
+  loadKbDocs();
   filePopover.classList.toggle("show");
 };
 // 点击弹层外部时关闭
@@ -422,24 +537,54 @@ fileInput.onchange = async () => {
   const files = Array.from(fileInput.files);
   if (!files.length) return;
 
-  const room = MAX_DATASETS - datasets.length;
-  const toUpload = files.slice(0, room);
-  const skipped = files.length - toUpload.length;
+  const extOf = (f) => f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+  const isDoc = (f) => [".txt", ".md", ".pdf"].includes(extOf(f));
+  const isData = (f) => [".csv", ".xlsx", ".xls"].includes(extOf(f));
+  // 知识库可收的文件：TXT/MD/PDF/CSV（Excel 仅支持数据分析模式）
+  const isKbFile = (f) => isDoc(f) || extOf(f) === ".csv";
+
+  // 数据分析模式下选了 TXT/MD/PDF：自动切换到知识库模式并入库
+  let autoSwitched = false;
+  if (mode === "analysis" && files.some(isDoc)) {
+    setMode("rag");
+    autoSwitched = true;
+  }
+
+  const inRag = mode === "rag";
+  const current = inRag ? kbDocs : datasets;
+  const maxN = inRag ? MAX_KB_DOCS : MAX_DATASETS;
+
+  // 按模式过滤：知识库收 TXT/MD/PDF/CSV，数据分析收 CSV/Excel
+  const okFiles = files.filter((f) => (inRag ? isKbFile(f) : isData(f)));
+  const wrongFiles = files.filter((f) => (inRag ? !isKbFile(f) : !isData(f)));
 
   uploadBtn.disabled = true;
   folderBtn.disabled = true;
   uploadBtn.textContent = "…";
 
   let okCount = 0;
-  const errors = [];
+  const errors = wrongFiles.map((f) =>
+    inRag
+      ? `${f.name}（知识库支持 TXT/MD/PDF/CSV，Excel 请切到 📊 数据分析 模式上传）`
+      : `${f.name}（TXT/MD/PDF 请切到 📚 知识库问答 模式上传）`
+  );
+
+  const room = maxN - current.length;
+  const toUpload = okFiles.slice(0, room);
+  const skipped = okFiles.length - toUpload.length;
+
   for (const file of toUpload) {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const resp = await fetch("/upload", { method: "POST", body: fd });
+      const resp = await fetch(inRag ? "/kb/upload" : "/upload", { method: "POST", body: fd });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.detail || "上传失败");
-      datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
+      if (inRag) {
+        kbDocs.push({ doc_id: data.doc_id, filename: data.filename, chunks: data.chunks });
+      } else {
+        datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
+      }
       okCount++;
     } catch (e) {
       errors.push(`${file.name}（${e.message}）`);
@@ -451,9 +596,14 @@ fileInput.onchange = async () => {
   // 汇总本次上传结果
   const bubble = addBubble("assistant");
   const lines = [];
-  if (okCount) lines.push(`成功加载 ${okCount} 个文件，当前共 ${datasets.length} 个（点 📁 查看）。`);
+  if (autoSwitched) lines.push("检测到文本文档，已自动切换到 📚 知识库问答 模式。");
+  if (inRag) {
+    if (okCount) lines.push(`成功入库 ${okCount} 个文档，知识库现有 ${kbDocs.length} 个（点 📁 查看），可以开始提问了。`);
+  } else {
+    if (okCount) lines.push(`成功加载 ${okCount} 个文件，当前共 ${datasets.length} 个（点 📁 查看）。`);
+  }
   if (errors.length) lines.push("以下文件失败：" + errors.join("；"));
-  if (skipped > 0) lines.push(`已达 ${MAX_DATASETS} 个文件上限，${skipped} 个未上传，请先在 📁 中移除部分文件。`);
+  if (skipped > 0) lines.push(`已达 ${maxN} 个上限，${skipped} 个未上传，请先在 📁 中移除部分文件。`);
   bubble.textContent = lines.join("\n");
   if (errors.length || skipped > 0) bubble.parentElement.classList.add("error");
 
@@ -467,7 +617,7 @@ async function send(text) {
   sending = true;
   sendBtn.disabled = true;
 
-  const prefix = datasets.length
+  const prefix = mode === "analysis" && datasets.length
     ? `【数据文件：${datasets.map((d, i) => `df${i + 1}=${d.filename}`).join("，")}】\n`
     : "";
   messages.push({ role: "user", content: prefix + text });
@@ -480,7 +630,11 @@ async function send(text) {
     const resp = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, dataset_ids: datasets.map(d => d.dataset_id) }),
+      body: JSON.stringify({
+        messages,
+        dataset_ids: mode === "analysis" ? datasets.map(d => d.dataset_id) : [],
+        mode,
+      }),
     });
 
     const reader = resp.body.getReader();
@@ -488,6 +642,7 @@ async function send(text) {
     let buffer = "";
     let reply = "";
     let resultHtml = "";
+    let sourcesHtml = "";
     const pendingCharts = [];  // [{id, option}]
 
     while (true) {
@@ -524,6 +679,14 @@ async function send(text) {
             resultHtml += `<div class="err">⚠ ${escapeHtml(payload.error)}</div>`;
           }
           resultHtml += "</div>";
+        } else if (payload.type === "sources") {
+          // RAG 引用来源
+          if (payload.sources && payload.sources.length) {
+            sourcesHtml = '<div class="sources"><div class="label">📎 依据来源</div>' +
+              payload.sources.map(s =>
+                `<details><summary>《${escapeHtml(s.filename)}》</summary><p>${escapeHtml(s.snippet)}…</p></details>`
+              ).join("") + "</div>";
+          }
         } else if (payload.type === "error") {
           bubble.parentElement.classList.add("error");
           reply = "出错了：" + payload.error;
@@ -532,9 +695,9 @@ async function send(text) {
       }
     }
 
-    // 流结束后，把整段回复格式化为 文本+代码块，并追加执行结果
+    // 流结束后，把整段回复格式化为 文本+代码块，并追加执行结果 / 引用来源
     bubble.classList.remove("cursor");
-    bubble.innerHTML = formatMessage(reply) + resultHtml;
+    bubble.innerHTML = formatMessage(reply) + resultHtml + sourcesHtml;
     messages.push({ role: "assistant", content: reply });
     chatEl.scrollTop = chatEl.scrollHeight;
     // DOM 挂载后再初始化图表（容器此时才有真实尺寸）

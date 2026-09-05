@@ -8,6 +8,9 @@ venv/
 # 用户上传的数据文件与运行时生成的临时代码
 uploads/
 
+# 本地向量库数据（RAG 知识库）
+chroma_db/
+
 # 运行日志
 server.log
 *.log

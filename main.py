@@ -11,13 +11,15 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+import kb
 import llm
 
 app = FastAPI(title="AI 数据分析")
 
 BASE_DIR = os.path.dirname(__file__)
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+KB_DIR = os.path.join(UPLOAD_DIR, "kb")
+os.makedirs(KB_DIR, exist_ok=True)
 
 # 内存中保存已上传数据集的信息：dataset_id -> {path, filename, summary}
 datasets: Dict[str, dict] = {}
@@ -32,6 +34,8 @@ class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     # 当前挂载的数据集 id 列表（按顺序对应代码环境中的 df1、df2……），为空则普通聊天
     dataset_ids: List[str] = []
+    # 对话模式：analysis=数据分析（默认）/ rag=知识库问答
+    mode: Optional[str] = None
 
 
 def load_dataframe(path: str, ext: str) -> pd.DataFrame:
@@ -120,6 +124,51 @@ def remove_dataset(dataset_id: str):
     return {"ok": True}
 
 
+# ———————— 知识库（RAG）接口 ————————
+
+
+@app.post("/kb/upload")
+async def kb_upload(file: UploadFile = File(...)):
+    """上传文档（TXT/MD/PDF）入库：解析 → 切分 → 向量化 → 存入 Chroma"""
+    filename = os.path.basename(file.filename or "未命名文档")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in kb.KB_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="知识库仅支持 TXT / MD / PDF / CSV 文档")
+
+    content = await file.read()
+    if len(content) > kb.MAX_KB_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="文档大小不能超过 20MB")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="文件内容为空，请先在文档中写入文字再上传")
+
+    save_path = os.path.join(KB_DIR, f"{uuid.uuid4().hex}{ext}")
+    with open(save_path, "wb") as f:
+        f.write(content)
+
+    try:
+        result = kb.ingest(save_path, ext, filename)
+    except Exception as e:
+        os.remove(save_path)
+        raise HTTPException(status_code=400, detail=f"文档入库失败：{e}")
+    return result
+
+
+@app.get("/kb/documents")
+def kb_documents():
+    """列出知识库中的全部文档"""
+    return kb.list_documents()
+
+
+@app.delete("/kb/documents/{doc_id}")
+def kb_delete(doc_id: str):
+    """删除知识库文档：删向量块 + 删磁盘文件"""
+    target = next((d for d in kb.list_documents() if d["doc_id"] == doc_id), None)
+    kb.delete_document(doc_id)
+    if target and target.get("path") and os.path.exists(target["path"]):
+        os.remove(target["path"])
+    return {"ok": True}
+
+
 def extract_code(reply: str) -> Optional[str]:
     """从模型回复中提取 ```python 代码块"""
     m = re.search(r"```(?:python)?\s*\n?(.*?)```", reply, re.S)
@@ -179,15 +228,39 @@ def sse(data: dict) -> str:
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    """流式对话接口：SSE 逐字返回模型回复；分析场景在回复后追加代码执行结果"""
+    """流式对话接口：SSE 逐字返回模型回复。
+
+    三种场景：数据分析（挂载数据集）/ RAG 知识库问答（mode=rag）/ 普通聊天
+    """
     # 按前端传入顺序收集当前挂载的数据集（对应 df1、df2……）
     active = [datasets[i] for i in req.dataset_ids if i in datasets]
 
-    if active:
+    sources = []  # 引用出处（RAG 模式：知识库资料；数据分析模式：参考的业务知识）
+    if req.mode == "rag":
+        question = req.messages[-1]["content"] if req.messages else ""
+        # 多轮追问先改写成独立问题再检索（"那华南呢"→"华南地区的销售额是多少"），失败自动回退原问题
+        search_query = llm.rewrite_question(req.messages[:-1], question)
+        try:
+            docs = kb.retrieve(search_query, k=kb.TOP_K)
+            context_text, sources = kb.build_context(docs)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"知识库检索失败：{e}")
+        system_content = llm.build_rag_prompt(context_text)
+    elif active:
         summary_text = "\n\n".join(dataset_summary_text(i + 1, ds) for i, ds in enumerate(active))
+        # 数据分析时自动参考永久知识库中的业务规则（Top-3）；库为空或检索失败都不影响分析
+        question = req.messages[-1]["content"] if req.messages else ""
+        kb_context = ""
+        try:
+            if question and kb.doc_count() > 0:
+                docs = kb.retrieve(question, k=3)
+                if docs:
+                    kb_context, sources = kb.build_context(docs)
+        except Exception:
+            kb_context, sources = "", []
+        system_content = llm.build_system_prompt(summary_text, kb_context)
     else:
-        summary_text = None
-    system_content = llm.build_system_prompt(summary_text)
+        system_content = llm.build_system_prompt(None)
 
     messages = [{"role": "system", "content": system_content}] + req.messages
 
@@ -198,8 +271,11 @@ def chat(req: ChatRequest):
                 full_reply += delta
                 yield sse({"type": "content", "content": delta})
 
-            # 数据分析场景：提取代码并执行，把结果回传前端
-            if active:
+            if sources:
+                # 回传引用出处：RAG 模式是知识库资料，数据分析模式是参考的业务知识
+                yield sse({"type": "sources", "sources": sources})
+            if req.mode != "rag" and active:
+                # 数据分析场景：提取代码并执行，把结果回传前端
                 code = extract_code(full_reply)
                 if code:
                     result = run_analysis(active, code)

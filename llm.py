@@ -68,7 +68,7 @@ ANALYSIS_PROMPT_TEMPLATE = """你是一名严谨的数据分析师。用户上�
 请根据用户的问题编写 pandas 分析代码，要求：
 
 【代码规范】
-1. 只做只读分析：不读写文件、不联网；环境中只有 pandas 和 numpy，禁止 import matplotlib、seaborn、plotly 等任何绘图库（没有安装，会报错），图表只能通过下面的 chart 变量交给前端渲染
+1. 只做只读分析：不读写文件、不联网；可用库：pandas（pd）、numpy（np）、scipy、scikit-learn（sklearn）、statsmodels（均已预装，可直接 import）；禁止 import matplotlib、seaborn、plotly 等绘图库（未安装），图表只能通过下面的 chart 变量交给前端渲染
 2. 引用列名必须与摘要中原样一致（注意空格和大小写）；不确定列是否存在时，先 print(df.columns) 确认再取列
 3. 需要跨文件关联分析时，用 pd.merge / pd.concat / join 等，先在代码中确认关联键存在并完成合并，再统计
 4. 代码要稳健：过滤、聚合前先处理缺失值（dropna 或 fillna，并在结论中说明口径）；分组结果按业务含义排序（如排名类默认降序）

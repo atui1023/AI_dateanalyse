@@ -7,7 +7,7 @@ import uuid
 from typing import Dict, List, Optional
 
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -84,8 +84,9 @@ def dataset_summary_text(index: int, ds: dict) -> str:
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    """上传数据文件，解析后返回数据集 id 和摘要"""
-    filename = file.filename or "未命名文件"
+    """上传表格数据文件（CSV/Excel）：同步解析 pandas 摘要用于数据分析，
+    同时登记进知识库“临时文件”区并后台异步向量化（上传后即可被 RAG 检索）。"""
+    filename = os.path.basename(file.filename or "未命名文件")
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_EXT:
         raise HTTPException(status_code=400, detail="仅支持 CSV / Excel（.csv / .xlsx / .xls）文件")
@@ -94,78 +95,174 @@ async def upload(file: UploadFile = File(...)):
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="文件大小不能超过 10MB")
 
-    dataset_id = uuid.uuid4().hex
-    save_path = os.path.join(UPLOAD_DIR, dataset_id + ext)
+    # 统一存入知识库目录，由 kb 模块登记并触发后台向量化
+    save_path = os.path.join(KB_DIR, f"{uuid.uuid4().hex}{ext}")
     with open(save_path, "wb") as f:
         f.write(content)
 
     try:
         df = load_dataframe(save_path, ext)
     except Exception as e:
-        os.remove(save_path)
+        if os.path.exists(save_path):
+            os.remove(save_path)
         raise HTTPException(status_code=400, detail=f"文件解析失败：{e}")
 
+    doc = kb.register_document(save_path, ext, filename)  # 状态=解析中，后台向量化
     summary = build_summary(df)
-    datasets[dataset_id] = {
+    datasets[doc["doc_id"]] = {
         "path": save_path,
         "ext": ext,
         "filename": filename,
         "summary": summary,
+        "doc_id": doc["doc_id"],
     }
-    return {"dataset_id": dataset_id, "filename": filename, "summary": summary}
+    return {
+        "dataset_id": doc["doc_id"],
+        "doc_id": doc["doc_id"],
+        "filename": filename,
+        "summary": summary,
+        "status": doc["status"],
+    }
 
 
 @app.delete("/datasets/{dataset_id}")
 def remove_dataset(dataset_id: str):
-    """移除数据集：删除内存记录和磁盘文件"""
-    ds = datasets.pop(dataset_id, None)
-    if ds and os.path.exists(ds["path"]):
-        os.remove(ds["path"])
+    """取消挂载数据集：仅移除内存中的分析挂载（df1、df2……），
+    文件本身与向量数据保留在知识库“临时文件”区，如需彻底删除请用知识库删除接口。"""
+    datasets.pop(dataset_id, None)
     return {"ok": True}
+
+
+@app.post("/kb/documents/{doc_id}/mount")
+def kb_mount(doc_id: str):
+    """把知识库中的表格文件挂载为分析数据集（df1、df2……），返回数据摘要"""
+    try:
+        rec = kb.get_document(doc_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if rec["ext"] not in ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail="仅 CSV / Excel 表格文件可用于数据分析")
+    if not os.path.exists(rec["path"]):
+        raise HTTPException(status_code=400, detail="原始文件已丢失，请重新上传")
+    try:
+        df = load_dataframe(rec["path"], rec["ext"])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"文件解析失败：{e}")
+    summary = build_summary(df)
+    datasets[doc_id] = {
+        "path": rec["path"],
+        "ext": rec["ext"],
+        "filename": rec["filename"],
+        "summary": summary,
+        "doc_id": doc_id,
+    }
+    return {"dataset_id": doc_id, "filename": rec["filename"], "summary": summary}
 
 
 # ———————— 知识库（RAG）接口 ————————
 
 
 @app.post("/kb/upload")
-async def kb_upload(file: UploadFile = File(...)):
-    """上传文档（TXT/MD/PDF）入库：解析 → 切分 → 向量化 → 存入 Chroma"""
+async def kb_upload(file: UploadFile = File(...), folder_id: str = Form(None)):
+    """上传文档（TXT/MD/PDF/CSV/Excel）：立即登记进知识库并返回，
+    后台异步完成 解析 → 切分 → 向量化（状态可通过 /kb/documents 轮询）。
+    folder_id 可选；不传或无效时自动归入系统“临时文件”知识库（兜底机制）。"""
     filename = os.path.basename(file.filename or "未命名文档")
     ext = os.path.splitext(filename)[1].lower()
     if ext not in kb.KB_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="知识库仅支持 TXT / MD / PDF / CSV 文档")
+        raise HTTPException(status_code=400, detail="仅支持 TXT / MD / PDF / CSV / Excel 文档")
 
     content = await file.read()
     if len(content) > kb.MAX_KB_FILE_SIZE:
         raise HTTPException(status_code=400, detail="文档大小不能超过 20MB")
-    if not content.strip():
+    if ext in (".txt", ".md", ".csv") and not content.strip():
         raise HTTPException(status_code=400, detail="文件内容为空，请先在文档中写入文字再上传")
 
     save_path = os.path.join(KB_DIR, f"{uuid.uuid4().hex}{ext}")
     with open(save_path, "wb") as f:
         f.write(content)
 
-    try:
-        result = kb.ingest(save_path, ext, filename)
-    except Exception as e:
-        os.remove(save_path)
-        raise HTTPException(status_code=400, detail=f"文档入库失败：{e}")
-    return result
+    doc = kb.register_document(save_path, ext, filename, folder_id=folder_id)
+    return {"doc_id": doc["doc_id"], "filename": doc["filename"], "status": doc["status"]}
 
 
 @app.get("/kb/documents")
 def kb_documents():
-    """列出知识库中的全部文档"""
+    """列出知识库中的全部文档（含解析状态：parsing/ready/failed）"""
     return kb.list_documents()
 
 
 @app.delete("/kb/documents/{doc_id}")
 def kb_delete(doc_id: str):
-    """删除知识库文档：删向量块 + 删磁盘文件"""
-    target = next((d for d in kb.list_documents() if d["doc_id"] == doc_id), None)
-    kb.delete_document(doc_id)
-    if target and target.get("path") and os.path.exists(target["path"]):
-        os.remove(target["path"])
+    """删除知识库文档：同步清理向量块/向量（防幽灵数据）+ 注册表记录 + 磁盘文件 + 分析挂载"""
+    rec = kb.delete_document(doc_id)
+    datasets.pop(doc_id, None)  # 若正挂载为 df，一并取消挂载
+    if rec and rec.get("path") and os.path.exists(rec["path"]):
+        try:
+            os.remove(rec["path"])
+        except OSError:
+            pass
+    return {"ok": True}
+
+
+@app.post("/kb/documents/{doc_id}/retry")
+def kb_retry(doc_id: str):
+    """重试解析失败的文档（重新触发后台向量化）"""
+    try:
+        doc = kb.retry_document(doc_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"doc_id": doc["doc_id"], "status": doc["status"]}
+
+
+# ———————— 知识库（文件夹：分类 + 按需激活）接口 ————————
+
+
+@app.get("/kb/folders")
+def kb_folders_list():
+    """知识库列表（含激活状态、文件数与向量段数）"""
+    return kb.list_folders()
+
+
+@app.post("/kb/folders")
+def kb_folder_create(payload: dict):
+    """新建知识库：{"name": "..."}"""
+    try:
+        return kb.create_folder(payload.get("name", ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.patch("/kb/folders/{folder_id}")
+def kb_folder_update(folder_id: str, payload: dict):
+    """更新知识库：{"name": "..."} 重命名 / {"active": true|false} 切换激活"""
+    try:
+        if "name" in payload:
+            return kb.rename_folder(folder_id, payload["name"])
+        if "active" in payload:
+            return kb.set_folder_active(folder_id, payload["active"])
+        raise HTTPException(status_code=400, detail="无有效字段（支持 name / active）")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/kb/folders/{folder_id}")
+def kb_folder_delete(folder_id: str):
+    """删除知识库：其下文件自动退回系统“临时文件”库（仅改外键，向量数据不丢失）"""
+    try:
+        moved = kb.delete_folder(folder_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, "moved_docs": moved}
+
+
+@app.patch("/kb/documents/{doc_id}/folder")
+def kb_doc_move(doc_id: str, payload: dict):
+    """移动文档到指定知识库：{"folder_id": "..."}（仅更新外键，不重新向量化）"""
+    try:
+        kb.move_document(doc_id, payload.get("folder_id", ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True}
 
 
@@ -241,7 +338,7 @@ def chat(req: ChatRequest):
         # 多轮追问先改写成独立问题再检索（"那华南呢"→"华南地区的销售额是多少"），失败自动回退原问题
         search_query = llm.rewrite_question(req.messages[:-1], question)
         try:
-            docs = kb.retrieve(search_query, k=kb.TOP_K)
+            docs = kb.retrieve(search_query, k=kb.TOP_K, folder_ids=kb.active_folder_ids())
             context_text, sources = kb.build_context(docs)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"知识库检索失败：{e}")
@@ -253,7 +350,8 @@ def chat(req: ChatRequest):
         kb_context = ""
         try:
             if question and kb.doc_count() > 0:
-                docs = kb.retrieve(question, k=3)
+                # 分析时也只参考激活文件夹内的业务规则（与问答一致的按需范围）
+                docs = kb.retrieve(question, k=3, folder_ids=kb.active_folder_ids())
                 if docs:
                     kb_context, sources = kb.build_context(docs)
         except Exception:

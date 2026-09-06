@@ -3,12 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI 数据分析</title>
+<title>智能数据分析助手</title>
 <script src="https://cdn.staticfile.org/echarts/5.5.1/echarts.min.js"></script>
 <script>
   // CDN 加载失败时回退到备用源
   if (!window.echarts) {
     document.write('<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"><\/script>');
+  }
+</script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script>
+  if (!window.lucide) {
+    document.write('<script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"><\/script>');
   }
 </script>
 <style>
@@ -20,6 +26,12 @@
     display: flex;
     flex-direction: column;
   }
+  /* Lucide 图标统一尺寸 */
+  .lucide { width: 16px; height: 16px; stroke-width: 2; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
   header {
     background: #fff;
     padding: 14px 20px;
@@ -27,8 +39,12 @@
     font-size: 16px;
     font-weight: 600;
     color: #1d2129;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
-  header span { font-weight: 400; font-size: 13px; color: #86909c; margin-left: 10px; }
+  header .lucide { width: 18px; height: 18px; color: #165dff; }
+  header span { font-weight: 400; font-size: 13px; color: #86909c; margin-left: 6px; }
   #chat {
     flex: 1;
     overflow-y: auto;
@@ -43,6 +59,7 @@
     font-size: 13px;
     margin-top: 40px;
     line-height: 2;
+    white-space: pre-line;
   }
   .msg { display: flex; }
   .msg.user { justify-content: flex-end; }
@@ -71,7 +88,7 @@
     font-family: Consolas, "Courier New", monospace;
   }
   .result { margin-top: 10px; }
-  .result .label { font-size: 13px; font-weight: 600; color: #4e5969; margin-bottom: 6px; }
+  .result .label { font-size: 13px; font-weight: 600; color: #4e5969; margin-bottom: 6px; display: flex; align-items: center; gap: 5px; }
   .result pre.stdout {
     background: #f7f8fa;
     border: 1px solid #e5e6eb;
@@ -98,7 +115,8 @@
     white-space: nowrap;
   }
   .result th { background: #f2f3f5; font-weight: 600; }
-  .result .err { color: #cb272d; font-size: 13px; }
+  .result .err { color: #cb272d; font-size: 13px; display: flex; align-items: center; gap: 5px; }
+  .result .err .lucide { width: 14px; height: 14px; color: #cb272d; }
   .result .chart {
     width: 100%;
     min-width: 360px;
@@ -108,17 +126,21 @@
   .cursor::after { content: "▋"; animation: blink 1s infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 
-  /* 已读取文件弹层（收在 📁 按钮里，不常驻占屏） */
+  /* —————— 知识库管理弹层 —————— */
   .composer { position: relative; }
   #filePopover {
     display: none;
     position: absolute;
     left: 20px;
     bottom: 78px;
-    width: 440px;
+    width: 560px;
     max-width: calc(100vw - 40px);
-    max-height: 50vh;
-    overflow-y: auto;
+    height: 70vh;
+    max-height: 80vh;
+    min-width: 360px;
+    min-height: 260px;
+    overflow: auto;
+    resize: both;
     background: #fff;
     border: 1px solid #e5e6eb;
     border-radius: 12px;
@@ -127,11 +149,148 @@
     z-index: 50;
   }
   #filePopover.show { display: block; }
-  #filePopover .bar-title { font-size: 12px; color: #86909c; margin-bottom: 8px; }
-  #filePopover .empty-tip { font-size: 13px; color: #86909c; padding: 10px 2px; }
-  #filePopover .section-title { font-size: 12px; color: #4e5969; font-weight: 600; margin: 12px 0 6px; padding-bottom: 4px; border-bottom: 1px dashed #e5e6eb; }
-  #fileList > .section-title:first-child { margin-top: 0; }
-  #fileList { display: flex; flex-direction: column; gap: 8px; }
+  .popover-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  #filePopover .bar-title { font-size: 13px; font-weight: 600; color: #1d2129; display: flex; align-items: center; gap: 6px; }
+  .head-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid #bedaff; background: #e8f3ff; color: #165dff;
+    border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  }
+  .head-btn:hover { background: #d4e8ff; }
+  .scope-hint { font-size: 12px; color: #86909c; line-height: 1.6; margin-bottom: 8px; }
+  #filePopover .empty-tip { font-size: 12px; color: #86909c; padding: 8px 4px; }
+  .warn-tip { font-size: 12px; color: #d46b08; background: #fff7e6; border-radius: 6px; padding: 6px 8px; margin-top: 6px; }
+
+  /* 知识库（文件夹）树 */
+  .folder-block { border-bottom: 1px solid #f2f3f5; }
+  .folder-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 2px; font-size: 13px; color: #1d2129;
+    border-radius: 6px; cursor: default; user-select: none;
+  }
+  .folder-head:hover { background: #f7f8fa; }
+  .chev { background: none; border: none; cursor: pointer; padding: 2px; color: #86909c; display: inline-flex; border-radius: 4px; }
+  .chev .lucide { width: 14px; height: 14px; transition: transform 0.2s ease; }
+  .folder-block.open .chev .lucide { transform: rotate(90deg); }
+  .fcheck-wrap { display: inline-flex; align-items: center; }
+  .folder-head .fname { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folder-head .fname .lucide { width: 15px; height: 15px; color: #f7a325; margin-right: 3px; vertical-align: -2px; }
+  .folder-head .meta { flex-shrink: 0; font-size: 12px; color: #86909c; margin-left: 4px; }
+  .folder-head .spacer, .file-row .spacer { flex: 1; }
+  /* 双击展开动画 */
+  .folder-files { max-height: 0; overflow: hidden; transition: max-height 0.25s ease; }
+  .folder-block.open .folder-files { max-height: 420px; overflow-y: auto; }
+  .folder-files .empty-tip { padding-left: 34px; }
+
+  /* 文件行 */
+  .file-row {
+    position: relative;
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 8px 6px 34px; font-size: 12px; color: #4e5969;
+    border-radius: 6px;
+  }
+  .file-row:hover { background: #f7f8fa; }
+  .file-row .file-ico { width: 15px; height: 15px; color: #86909c; flex-shrink: 0; }
+  .file-row .fname { font-weight: 500; color: #1d2129; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+  /* 解析状态徽章 */
+  .st { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
+  .st .lucide { width: 12px; height: 12px; }
+  .st-parsing { color: #165dff; background: #e8f3ff; }
+  .st-ready { color: #008a1e; background: #e8ffea; }
+  .st-failed { color: #cb272d; background: #ffece8; }
+  .retry-btn {
+    border: none; background: none; cursor: pointer; color: #cb272d;
+    font-size: 11px; display: inline-flex; align-items: center; gap: 2px; padding: 0;
+    text-decoration: underline;
+  }
+  .retry-btn .lucide { width: 11px; height: 11px; }
+  /* Hover 操作按钮 */
+  .row-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.15s ease; flex-shrink: 0; }
+  .folder-head:hover .row-actions, .file-row:hover .row-actions { opacity: 1; }
+  .icon-btn {
+    background: none; border: none; cursor: pointer; padding: 3px; border-radius: 4px;
+    color: #86909c; display: inline-flex; align-items: center;
+  }
+  .icon-btn:hover { background: #e5e6eb; color: #1d2129; }
+  .icon-btn.danger:hover { background: #ffece8; color: #cb272d; }
+  .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* df 挂载徽章（点击取消挂载） */
+  .badge-df {
+    background: #165dff; color: #fff; border: none; border-radius: 6px;
+    padding: 1px 7px; font-size: 11px; font-family: Consolas, monospace; font-weight: 600;
+    cursor: pointer; flex-shrink: 0;
+  }
+  .badge-df:hover { background: #0e42d2; }
+  /* 移动菜单（已弃用，保留以防旧引用） */
+  .move-menu { display: none; }
+  /* 移动文件：模态弹窗 */
+  .modal-mask {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(29, 33, 41, 0.45);
+    z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  .modal-mask.show { display: flex; }
+  .modal-box {
+    background: #fff; border-radius: 12px;
+    width: 420px; max-width: calc(100vw - 40px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+  }
+  .modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1px solid #f2f3f5;
+  }
+  .modal-title { font-size: 15px; font-weight: 600; color: #1d2129; display: flex; align-items: center; gap: 6px; }
+  .modal-title .lucide { color: #f7a325; }
+  .modal-body { padding: 12px 16px 16px; }
+  .move-tip { font-size: 13px; color: #86909c; margin-bottom: 10px; }
+  .move-folder-list {
+    max-height: 360px; overflow-y: auto;
+    border: 1px solid #e5e6eb; border-radius: 8px;
+  }
+  .move-folder-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; cursor: pointer;
+    border-bottom: 1px solid #f2f3f5;
+    transition: background 0.12s ease;
+  }
+  .move-folder-item:last-child { border-bottom: none; }
+  .move-folder-item:hover { background: #f7f8fa; }
+  .move-folder-item .lucide { width: 16px; height: 16px; color: #f7a325; flex-shrink: 0; }
+  .move-folder-item .mname { flex: 1; font-size: 14px; color: #1d2129; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .move-folder-item .mcount { font-size: 12px; color: #86909c; flex-shrink: 0; }
+  /* 新建知识库 */
+  .folder-add { display: flex; gap: 6px; margin-top: 10px; }
+  .folder-add input {
+    flex: 1; border: 1px solid #e5e6eb; border-radius: 6px; padding: 5px 8px;
+    font-size: 13px; outline: none;
+  }
+  .folder-add input:focus { border-color: #4080ff; }
+  .folder-add button {
+    border: none; background: #165dff; color: #fff; border-radius: 6px;
+    padding: 5px 14px; cursor: pointer; font-size: 13px;
+  }
+  .folder-add button:hover { background: #0e42d2; }
+
+  /* Toast */
+  #toastBox {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center;
+  }
+  .toast {
+    display: flex; align-items: center; gap: 7px;
+    background: #1d2129; color: #fff; font-size: 13px;
+    padding: 8px 16px; border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    animation: toastIn 0.2s ease;
+  }
+  .toast.ok { background: #008a1e; }
+  .toast.err { background: #cb272d; }
+  .toast .lucide { color: #fff; width: 15px; height: 15px; }
+
+  /* 角标 */
   .folder-btn { position: relative; }
   .count-badge {
     display: none;
@@ -149,7 +308,7 @@
     padding: 0 4px;
   }
   .count-badge.show { display: inline-block; }
-  /* 模式切换（圆形按钮，与上传/文件夹按钮同风格） */
+  /* 模式切换 */
   #modeBar {
     display: flex;
     align-items: center;
@@ -159,75 +318,35 @@
     border-top: 1px solid #e5e6eb;
   }
   .mode-btn {
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 18px;
     border: 1px solid #e5e6eb;
     background: #f2f3f5;
-    font-size: 18px;
-    line-height: 1;
+    font-size: 13px;
+    font-weight: 500;
+    color: #4e5969;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     cursor: pointer;
     transition: all 0.15s;
   }
+  .mode-btn .lucide { width: 15px; height: 15px; }
   .mode-btn:hover { background: #e5e6eb; }
   .mode-btn.active {
     background: #e8f3ff;
     border-color: #165dff;
+    color: #165dff;
     box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.15);
   }
-  #modeLabel { font-size: 13px; font-weight: 600; color: #4e5969; }
   /* RAG 引用来源 */
   .sources { margin-top: 10px; border-top: 1px dashed #e5e6eb; padding-top: 8px; }
-  .sources .label { font-size: 12px; font-weight: 600; color: #4e5969; margin-bottom: 4px; }
+  .sources .label { font-size: 12px; font-weight: 600; color: #4e5969; margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+  .sources .label .lucide { width: 13px; height: 13px; color: #165dff; }
   .sources details { margin-top: 4px; font-size: 12px; }
   .sources summary { cursor: pointer; color: #165dff; }
   .sources p { color: #4e5969; margin-top: 4px; line-height: 1.5; white-space: pre-wrap; }
-  /* 文件卡片 */
-  .file-card {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    background: #f2f7ff;
-    border: 1px solid #bedaff;
-    border-radius: 8px;
-    padding: 6px 10px;
-    font-size: 13px;
-    color: #1d2129;
-  }
-  .file-card .badge {
-    background: #165dff;
-    color: #fff;
-    border-radius: 6px;
-    padding: 1px 7px;
-    font-size: 12px;
-    font-family: Consolas, monospace;
-    font-weight: 600;
-  }
-  .file-card .badge.kb { background: #00b42a; }
-  .file-card .icon { font-size: 16px; }
-  .file-card .fname { font-weight: 600; }
-  .file-card .meta { color: #4e5969; }
-  .file-card .spacer { flex: 1; }
-  .file-card button.remove {
-    border: none;
-    background: none;
-    color: #86909c;
-    cursor: pointer;
-    font-size: 14px;
-    padding: 0 2px;
-  }
-  .file-card button.remove:hover { color: #cb272d; }
-  .file-card details { flex-basis: 100%; }
-  .file-card summary { cursor: pointer; color: #165dff; font-size: 12px; }
-  .file-card table {
-    border-collapse: collapse;
-    margin-top: 6px;
-    font-size: 12px;
-    background: #fff;
-  }
-  .file-card th, .file-card td { border: 1px solid #e5e6eb; padding: 3px 8px; white-space: nowrap; }
-  .file-card th { background: #f2f3f5; }
 
   form {
     display: flex;
@@ -243,11 +362,15 @@
     border-radius: 10px;
     width: 42px;
     height: 42px;
-    font-size: 18px;
     cursor: pointer;
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
+  .upload-btn .lucide { width: 19px; height: 19px; color: #4e5969; }
   .upload-btn:hover { background: #e5e6eb; }
+  .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   textarea {
     flex: 1;
     resize: none;
@@ -275,33 +398,51 @@
 </style>
 </head>
 <body>
-<header>AI 数据分析助手<span>📊 表格数据分析 · 📚 文档知识库问答</span></header>
+<header><i data-lucide="sparkles"></i>智能数据分析助手<span>表格数据分析 · 知识库问答</span></header>
 <div id="chat">
-  <div class="tip" id="tipText">
-    点击左下角 📎 上传数据文件（CSV / Excel），可一次选择多个文件（最多 10 个）<br>
-    📁 按钮可查看已读取的文件；然后用中文提问，例如：各区域销售额排名 / 对比两个文件的销售额<br>
-    上传 TXT / MD / PDF 会自动存入<b>永久知识库</b>（重启不丢），分析时会自动参考其中的业务规则与指标口径
-  </div>
+  <div class="tip" id="tipText">点击左下角上传按钮，可上传 CSV / Excel 数据文件（最多挂载 10 个）或 TXT / MD / PDF 知识文档
+所有文件上传后进入「临时文件」并自动解析、向量化，解析完成即可被检索
+双击知识库名称可展开文件列表；勾选知识库可限定问答与分析的检索范围</div>
 </div>
 
 <div id="modeBar">
-  <button class="mode-btn active" data-mode="analysis">📊 数据分析</button>
-  <button class="mode-btn" data-mode="rag">📚 知识库问答</button>
+  <button class="mode-btn active" data-mode="analysis" type="button"><i data-lucide="bar-chart-3"></i>数据分析</button>
+  <button class="mode-btn" data-mode="rag" type="button"><i data-lucide="book-open"></i>知识库问答</button>
 </div>
 
 <div class="composer">
   <div id="filePopover">
-    <div class="bar-title" id="popoverTitle">📁 文件管理（临时文件 + 永久知识库）：</div>
+    <div class="popover-head">
+      <span class="bar-title"><i data-lucide="library"></i>知识库管理</span>
+      <button class="head-btn" id="newFolderTopBtn" type="button"><i data-lucide="folder-plus"></i>新建知识库</button>
+    </div>
+    <div class="scope-hint">勾选知识库后，问答与数据分析仅在所选范围内检索；全部不勾选时检索全部文件。双击名称展开 / 收起文件列表。</div>
     <div id="fileList"></div>
   </div>
 
   <form id="form">
     <input type="file" id="fileInput" accept=".csv,.xlsx,.xls,.txt,.md,.pdf" multiple hidden>
-    <button type="button" class="upload-btn" id="uploadBtn" title="上传数据文件或知识库文档（可一次多选）">📎</button>
-    <button type="button" class="upload-btn folder-btn" id="folderBtn" title="查看已读取的文件/文档">📁<span id="fileCount" class="count-badge">0</span></button>
+    <button type="button" class="upload-btn" id="uploadBtn" title="上传文件（支持多选）"><i data-lucide="paperclip"></i></button>
+    <button type="button" class="upload-btn folder-btn" id="folderBtn" title="知识库管理"><i data-lucide="folder-open"></i><span id="fileCount" class="count-badge">0</span></button>
     <textarea id="input" rows="1" placeholder="输入你的问题，Enter 发送，Shift+Enter 换行"></textarea>
     <button id="sendBtn" type="submit">发送</button>
   </form>
+</div>
+
+<div id="toastBox"></div>
+
+<!-- 移动文件：选择目标知识库的模态弹窗 -->
+<div id="moveModal" class="modal-mask">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span class="modal-title"><i data-lucide="folder-input"></i>移动到知识库</span>
+      <button class="icon-btn" id="moveModalClose" type="button" title="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="move-tip" id="moveModalTip">选择目标知识库</div>
+      <div class="move-folder-list" id="moveFolderList"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -315,25 +456,36 @@ const folderBtn = document.getElementById("folderBtn");
 const filePopover = document.getElementById("filePopover");
 const fileCountBadge = document.getElementById("fileCount");
 const modeBar = document.getElementById("modeBar");
-const modeLabel = document.getElementById("modeLabel");
 const tipText = document.getElementById("tipText");
+
+function refreshIcons() { window.lucide && lucide.createIcons(); }
 
 // 完整对话历史，每次请求都带给后端，模型就能记住上下文
 const messages = [];
 let sending = false;
-// 当前挂载的数据集列表：[{dataset_id, filename, summary}, ...]，顺序对应代码里的 df1、df2……
+// 当前挂载的分析数据集：[{dataset_id, filename, summary}, ...]，顺序对应代码里的 df1、df2……
 let datasets = [];
 const MAX_DATASETS = 10;
-// 知识库（RAG）模式状态
-let mode = "analysis";   // analysis=数据分析 / rag=知识库问答
-let kbDocs = [];         // 已入库文档：[{doc_id, filename, chunks}, ...]
-let kbLoaded = false;    // 是否已拉取过知识库文档列表
-const MAX_KB_DOCS = 10;
+// 知识库状态
+let mode = "analysis";        // analysis=数据分析 / rag=知识库问答
+let kbDocs = [];              // 全部文档：[{doc_id, filename, ext, folder_id, status, chunks, error}, ...]
+let kbFolders = [];           // 知识库列表：[{id, name, active, system, docs, chunks}, ...]
+const expandedFolders = new Set(["default"]);  // 展开的知识库（默认展开“临时文件”）
+let pollTimer = null;
+const failedNotified = new Set();
+
+const TAB_EXT = [".csv", ".xlsx", ".xls"];
+const DOC_EXT = [".txt", ".md", ".pdf"];
+const extOf = (f) => {
+  const i = f.name.lastIndexOf(".");
+  return i >= 0 ? f.name.slice(i).toLowerCase() : "";
+};
 
 const MODE_TIPS = {
-  analysis: document.getElementById("tipText").innerHTML,
-  rag: "点击左下角 📎 上传 TXT / MD / PDF / CSV 文档入库（最多 10 个，永久保存）<br>📁 按钮可查看已入库的文档；提问示例：报销制度对住宿有什么规定 / 文档里的违约金怎么算",
+  analysis: "上传 CSV / Excel 数据文件即可开始数据分析；上传 TXT / MD / PDF 等文档会自动解析并向量化，分析时自动参考其中的业务规则\n在「知识库管理」中可新建知识库、移动文件，并勾选检索范围",
+  rag: "上传 TXT / MD / PDF / CSV / Excel 文件，系统将自动解析并向量化，状态显示为「已就绪」后即可就文档内容提问\n双击知识库名称展开文件列表，勾选知识库可限定检索范围",
 };
+
 // 所有已渲染的 ECharts 实例，统一 resize
 const chartInstances = [];
 let chartSeq = 0;
@@ -344,7 +496,7 @@ window.addEventListener("resize", () => {
   }
 });
 
-// 轮询等待 ECharts CDN 加载完成（最多约 8 秒），避免弱网下 window.echarts 未定义
+// 轮询等待 ECharts CDN 加载完成（最多约 8 秒）
 async function waitForEcharts() {
   for (let i = 0; i < 80; i++) {
     if (window.echarts) return true;
@@ -371,9 +523,21 @@ async function renderChart(el, option) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
+}
+
+// 轻量级 Toast 提示
+function toast(msg, type) {
+  const box = document.getElementById("toastBox");
+  const el = document.createElement("div");
+  el.className = "toast " + (type || "");
+  const icon = type === "ok" ? "check-circle-2" : type === "err" ? "alert-triangle" : "info";
+  el.innerHTML = `<i data-lucide="${icon}"></i><span>${escapeHtml(msg)}</span>`;
+  box.appendChild(el);
+  refreshIcons();
+  setTimeout(() => el.remove(), 2800);
 }
 
 // 把回复文本中的 ```python 代码块渲染成 <pre>
@@ -416,88 +580,299 @@ function addBubble(role) {
   return bubble;
 }
 
-function previewHtml(d) {
-  const s = d.summary;
-  if (!s.preview_rows.length) return "";
-  return `<details><summary>预览前 ${s.preview_rows.length} 行</summary><table><thead><tr>` +
-    s.preview_columns.map(c => `<th>${escapeHtml(c)}</th>`).join("") +
-    "</tr></thead><tbody>" +
-    s.preview_rows.map(r => "<tr>" + r.map(v => `<td>${escapeHtml(v)}</td>`).join("") + "</tr>").join("") +
-    "</tbody></table></details>";
+// ==================== 知识库管理弹层渲染 ====================
+
+function fileRowHtml(d) {
+  const isTab = TAB_EXT.includes(d.ext || (d.filename ? extOf({ name: d.filename }) : ""));
+  const mountIdx = datasets.findIndex(x => x.dataset_id === d.doc_id);
+  const fid = d.folder_id || "default";
+
+  let status;
+  if (d.status === "ready") {
+    status = `<span class="st st-ready" title="向量已就绪，可被检索"><i data-lucide="check-circle-2"></i>已就绪</span>`;
+  } else if (d.status === "failed") {
+    status = `<span class="st st-failed" title="${escapeHtml(d.error || "解析失败")}"><i data-lucide="alert-triangle"></i>解析失败`
+      + `<button class="retry-btn" data-act="retry" data-id="${d.doc_id}" type="button"><i data-lucide="rotate-cw"></i>重试</button></span>`;
+  } else {
+    status = `<span class="st st-parsing" title="正在后台解析与向量化"><i data-lucide="loader-2" class="spin"></i>解析中</span>`;
+  }
+
+  let mount;
+  if (mountIdx >= 0) {
+    mount = `<button class="badge-df" data-act="unmount" data-id="${d.doc_id}" title="已挂载为 df${mountIdx + 1}，点击取消挂载">df${mountIdx + 1}</button>`;
+  } else if (mode === "analysis" && isTab) {
+    mount = `<button class="icon-btn" data-act="mount" data-id="${d.doc_id}" title="添加至数据分析（挂载为 df）" type="button"><i data-lucide="plus-circle"></i></button>`;
+  } else {
+    mount = "";
+  }
+
+  // 移动目标：列出除当前知识库外的全部目标（模态弹窗中展示）
+  const targets = kbFolders.filter(f => f.id !== fid);
+
+  return `<div class="file-row" data-id="${d.doc_id}">
+    <i data-lucide="${isTab ? "file-spreadsheet" : "file-text"}" class="file-ico"></i>
+    <span class="fname" title="${escapeHtml(d.filename)}">${escapeHtml(d.filename)}</span>
+    ${status}
+    <span class="spacer"></span>
+    ${mount}
+    <span class="row-actions">
+      ${targets.length ? `<button class="icon-btn" data-act="move" data-id="${d.doc_id}" data-name="${escapeHtml(d.filename)}" title="移动到知识库" type="button"><i data-lucide="folder-input"></i></button>` : ""}
+      <button class="icon-btn danger" data-act="del" data-id="${d.doc_id}" data-name="${escapeHtml(d.filename)}" title="删除文件（同步清理向量数据）" type="button"><i data-lucide="trash-2"></i></button>
+    </span>
+  </div>`;
 }
 
 function renderFilePopover() {
   const listEl = document.getElementById("fileList");
-  // 📁 角标 = 临时文件数 + 永久知识库文档数
-  fileCountBadge.textContent = datasets.length + kbDocs.length;
-  fileCountBadge.classList.toggle("show", datasets.length + kbDocs.length > 0);
+  fileCountBadge.textContent = kbDocs.length;
+  fileCountBadge.classList.toggle("show", kbDocs.length > 0);
 
-  // —— 分区一：临时文件（本次会话，刷新后清空）——
-  let html = '<div class="section-title">⏳ 临时文件 · 本次会话（分析代码中对应 df1、df2……，刷新页面后清空）</div>';
-  if (datasets.length) {
-    html += datasets.map((d, i) => `
-      <div class="file-card">
-        <span class="badge">df${i + 1}</span>
-        <span class="icon">📊</span>
-        <span class="fname">${escapeHtml(d.filename)}</span>
-        <span class="meta">${d.summary.rows} 行 × ${d.summary.cols} 列</span>
-        <span class="spacer"></span>
-        <button class="remove" data-kind="ds" data-id="${d.dataset_id}" title="移除文件">✕</button>
-        ${previewHtml(d)}
-      </div>`).join("");
-  } else {
-    html += '<div class="empty-tip">还没有临时文件，点 📎 上传 CSV / Excel</div>';
+  let html = "";
+  if (!kbDocs.length) {
+    html += '<div class="empty-tip">暂无文件。点击左下角上传按钮，支持 TXT / MD / PDF / CSV / Excel，上传后自动解析并向量化。</div>';
   }
 
-  // —— 分区二：永久知识库（持久保存，重启不丢）——
-  html += '<div class="section-title">💾 永久知识库 · 长期保存（重启不丢，问答与分析都会自动参考）</div>';
-  if (kbDocs.length) {
-    html += kbDocs.map(d => `
-      <div class="file-card">
-        <span class="badge kb">📚</span>
-        <span class="icon">📄</span>
-        <span class="fname">${escapeHtml(d.filename)}</span>
-        <span class="meta">${d.chunks} 段</span>
+  for (const f of kbFolders) {
+    const files = kbDocs.filter(d => (d.folder_id || "default") === f.id);
+    const open = expandedFolders.has(f.id);
+    html += `<div class="folder-block ${open ? "open" : ""}" data-fid="${f.id}">
+      <div class="folder-head">
+        <button class="chev" data-act="toggle" title="展开 / 收起" type="button"><i data-lucide="chevron-right"></i></button>
+        <span class="fcheck-wrap" title="勾选后该知识库参与检索">
+          <input type="checkbox" class="fcheck" data-fid="${f.id}" ${f.active ? "checked" : ""}>
+        </span>
+        <span class="fname"><i data-lucide="${f.system ? "inbox" : "folder"}"></i>${escapeHtml(f.name)}</span>
+        <span class="meta">${f.docs} 个文件 · ${f.chunks} 段</span>
         <span class="spacer"></span>
-        <button class="remove" data-kind="kb" data-id="${d.doc_id}" title="从知识库彻底删除">✕</button>
-      </div>`).join("");
-  } else {
-    html += '<div class="empty-tip">知识库为空，点 📎 上传 TXT / MD / PDF / CSV 永久入库</div>';
+        ${f.system ? "" : `<span class="row-actions">
+          <button class="icon-btn" data-act="rename" data-fid="${f.id}" title="重命名" type="button"><i data-lucide="pencil"></i></button>
+          <button class="icon-btn danger" data-act="delf" data-fid="${f.id}" data-name="${escapeHtml(f.name)}" data-docs="${f.docs}" title="删除知识库" type="button"><i data-lucide="trash-2"></i></button>
+        </span>`}
+      </div>
+      <div class="folder-files">
+        ${files.length ? files.map(fileRowHtml).join("") : '<div class="empty-tip">暂无文件</div>'}
+      </div>
+    </div>`;
   }
+
+  if (kbFolders.length && !kbFolders.some(f => f.active)) {
+    html += '<div class="warn-tip">未勾选任何知识库：检索将覆盖全部文件</div>';
+  }
+  html += `<div class="folder-add"><input id="newFolderName" placeholder="新建知识库名称" maxlength="20"><button id="addFolderBtn" type="button">新建</button></div>`;
 
   listEl.innerHTML = html;
-  listEl.querySelectorAll("button.remove").forEach(btn => {
-    btn.onclick = () => (btn.dataset.kind === "ds" ? removeDataset(btn.dataset.id) : removeKbDoc(btn.dataset.id));
-  });
+  refreshIcons();
 }
 
-async function removeDataset(id) {
+// —— 弹层事件（事件委托） ——
+document.getElementById("fileList").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const act = btn.dataset.act;
+  const block = btn.closest(".folder-block");
+  const fid = block ? block.dataset.fid : null;
+
+  if (act === "toggle") { toggleFolder(fid); return; }
+  if (act === "rename") { renameFolder(btn.dataset.fid); return; }
+  if (act === "delf") { deleteFolder(btn.dataset.fid, btn.dataset.name, parseInt(btn.dataset.docs || "0", 10)); return; }
+  if (act === "mount") { mountDoc(btn.dataset.id); return; }
+  if (act === "unmount") { unmountDataset(btn.dataset.id); return; }
+  if (act === "retry") { retryDoc(btn.dataset.id); return; }
+  if (act === "del") { deleteDoc(btn.dataset.id, btn.dataset.name); return; }
+  if (act === "move") { openMoveModal(btn.dataset.id, btn.dataset.name); return; }
+  if (btn.id === "addFolderBtn") { addFolder(); return; }
+});
+
+// 双击知识库名称 / 图标区域展开（复选框、按钮上不触发）
+document.getElementById("fileList").addEventListener("dblclick", (e) => {
+  const head = e.target.closest(".folder-head");
+  if (!head) return;
+  if (e.target.closest("button, input")) return;
+  toggleFolder(head.parentElement.dataset.fid);
+});
+
+// 勾选 = 切换检索范围
+document.getElementById("fileList").addEventListener("change", (e) => {
+  const cb = e.target.closest('input.fcheck[data-fid]');
+  if (cb) patchFolder(cb.dataset.fid, { active: cb.checked });
+});
+
+// 新建知识库输入框回车
+document.getElementById("fileList").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "newFolderName") addFolder();
+});
+
+function toggleFolder(fid) {
+  if (!fid) return;
+  if (expandedFolders.has(fid)) expandedFolders.delete(fid);
+  else expandedFolders.add(fid);
+  renderFilePopover();
+}
+
+async function addFolder() {
+  const input = document.getElementById("newFolderName");
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
   try {
-    await fetch("/datasets/" + encodeURIComponent(id), { method: "DELETE" });
-  } catch (e) { /* 后端删除失败也从前端列表移除 */ }
+    const r = await fetch("/kb/folders", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "创建失败", "err");
+      return;
+    }
+    toast("知识库已创建", "ok");
+    await refreshKbData();
+  } catch (e) { toast("网络异常，创建失败", "err"); }
+}
+
+async function renameFolder(fid) {
+  const f = kbFolders.find(x => x.id === fid);
+  const name = prompt("重命名知识库：", f ? f.name : "");
+  if (name && name.trim()) await patchFolder(fid, { name: name.trim() });
+}
+
+async function deleteFolder(fid, name, docCount) {
+  if (docCount > 0) {
+    const ok = confirm(`知识库「${name}」包含 ${docCount} 个文件。\n删除后这些文件将移回「临时文件」，向量数据保留。是否继续？`);
+    if (!ok) return;
+  }
+  try {
+    const r = await fetch("/kb/folders/" + encodeURIComponent(fid), { method: "DELETE" });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "删除失败", "err");
+      return;
+    }
+    toast(docCount > 0 ? `已删除，${docCount} 个文件已移回「临时文件」` : "知识库已删除", "ok");
+    await refreshKbData();
+  } catch (e) { toast("网络异常，删除失败", "err"); }
+}
+
+async function patchFolder(fid, payload) {
+  try {
+    const r = await fetch("/kb/folders/" + encodeURIComponent(fid), {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "操作失败", "err");
+    }
+  } catch (e) { toast("网络异常", "err"); }
+  await refreshKbData();
+}
+
+async function mountDoc(id) {
+  try {
+    const r = await fetch(`/kb/documents/${encodeURIComponent(id)}/mount`, { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "挂载失败");
+    datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
+    renderFilePopover();
+    toast(`已添加至数据分析（df${datasets.length}）`, "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function unmountDataset(id) {
+  try { await fetch("/datasets/" + encodeURIComponent(id), { method: "DELETE" }); } catch (e) {}
   datasets = datasets.filter(d => d.dataset_id !== id);
   renderFilePopover();
+  toast("已取消挂载");
 }
 
-async function removeKbDoc(id) {
+async function deleteDoc(id, name) {
+  if (!confirm(`确认删除文件「${name}」？\n将同步清理其向量数据，删除后不可恢复。`)) return;
   try {
-    await fetch("/kb/documents/" + encodeURIComponent(id), { method: "DELETE" });
-  } catch (e) { /* 同上 */ }
-  kbDocs = kbDocs.filter(d => d.doc_id !== id);
+    const r = await fetch("/kb/documents/" + encodeURIComponent(id), { method: "DELETE" });
+    if (!r.ok) throw new Error("删除失败");
+    datasets = datasets.filter(d => d.dataset_id !== id);
+    toast("文件已删除", "ok");
+    await refreshKbData();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function moveDoc(id, folderId, folderName) {
+  try {
+    const r = await fetch(`/kb/documents/${encodeURIComponent(id)}/folder`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder_id: folderId }),
+    });
+    if (!r.ok) throw new Error("移动失败");
+    toast(`已移动至「${folderName}」`, "ok");
+    await refreshKbData();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function retryDoc(id) {
+  try {
+    const r = await fetch(`/kb/documents/${encodeURIComponent(id)}/retry`, { method: "POST" });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "重试失败", "err");
+      return;
+    }
+    toast("已重新开始解析");
+    await refreshKbData();
+    schedulePoll();
+  } catch (e) { toast("网络异常", "err"); }
+}
+
+// ==================== 数据加载与状态轮询 ====================
+
+async function loadFolders() {
+  try {
+    const r = await fetch("/kb/folders");
+    if (r.ok) kbFolders = await r.json();
+  } catch (e) { /* 下次轮询再试 */ }
+}
+
+async function loadDocs() {
+  try {
+    const r = await fetch("/kb/documents");
+    if (r.ok) kbDocs = await r.json();
+  } catch (e) { /* 下次轮询再试 */ }
+}
+
+async function refreshKbData() {
+  await Promise.all([loadFolders(), loadDocs()]);
   renderFilePopover();
 }
 
-// 模式切换：数据分析 / 知识库问答
+// 有文件处于“解析中”时，每 2 秒轮询状态；全部结束后自动停止
+function schedulePoll() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    await Promise.all([loadFolders(), loadDocs()]);
+    renderFilePopover();
+    for (const d of kbDocs) {
+      if (d.status === "failed" && !failedNotified.has(d.doc_id)) {
+        failedNotified.add(d.doc_id);
+        toast(`「${d.filename}」解析失败，可在文件行点击重试`, "err");
+      }
+    }
+    if (!kbDocs.some(d => d.status === "parsing")) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }, 2000);
+}
+
+// 页面打开即拉取知识库状态（重启 / 刷新后立即恢复）
+refreshKbData().then(() => { if (kbDocs.some(d => d.status === "parsing")) schedulePoll(); });
+
+// ==================== 模式切换 ====================
+
 function setMode(m) {
   if (mode === m) return;
   mode = m;
   modeBar.querySelectorAll(".mode-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === m));
-  modeLabel.textContent = m === "rag" ? "知识库问答模式" : "数据分析模式";
-  tipText.innerHTML = MODE_TIPS[m];
+  tipText.textContent = MODE_TIPS[m];
   inputEl.placeholder = m === "rag"
     ? "就文档内容提问，例如：制度里对住宿是怎么规定的"
     : "输入你的问题，Enter 发送，Shift+Enter 换行";
-  if (m === "rag" && !kbLoaded) loadKbDocs();
   renderFilePopover();
 }
 
@@ -505,113 +880,151 @@ modeBar.querySelectorAll(".mode-btn").forEach(b => {
   b.onclick = () => setMode(b.dataset.mode);
 });
 
-async function loadKbDocs() {
-  try {
-    const resp = await fetch("/kb/documents");
-    if (resp.ok) kbDocs = await resp.json();
-    kbLoaded = true;
-  } catch (e) { /* 下次再试 */ }
-  renderFilePopover();
-}
-
-// 页面一打开就拉取永久知识库列表：重启/刷新后已入库文档立即显示在 📁 弹层里
-loadKbDocs();
+// ==================== 弹层开关 ====================
 
 uploadBtn.onclick = () => fileInput.click();
+document.getElementById("newFolderTopBtn").onclick = () => {
+  const input = document.getElementById("newFolderName");
+  if (input) input.focus();
+};
 
-// 📁 文件夹按钮：打开文件管理弹层（同时刷新永久知识库列表）
 folderBtn.onclick = (e) => {
   e.stopPropagation();
-  loadKbDocs();
   filePopover.classList.toggle("show");
+  if (filePopover.classList.contains("show")) refreshKbData();
 };
-// 点击弹层外部时关闭
+
+// 点击外部：关闭知识库弹层
 document.addEventListener("click", (e) => {
+  if (!e.target.isConnected) return;
   if (!filePopover.classList.contains("show")) return;
   if (!filePopover.contains(e.target) && !folderBtn.contains(e.target)) {
     filePopover.classList.remove("show");
   }
 });
 
+// ==================== 移动文件：目标知识库选择模态框 ====================
+const moveModal = document.getElementById("moveModal");
+const moveFolderList = document.getElementById("moveFolderList");
+const moveModalTip = document.getElementById("moveModalTip");
+let movingDocId = null;
+let movingDocName = "";
+
+function openMoveModal(docId, docName) {
+  movingDocId = docId;
+  movingDocName = docName || "";
+  const curDoc = kbDocs.find(d => d.doc_id === docId);
+  const curFid = curDoc ? (curDoc.folder_id || "default") : "default";
+  // 列出除当前知识库外的全部目标
+  const targets = kbFolders.filter(f => f.id !== curFid);
+  moveModalTip.textContent = targets.length
+    ? `将「${movingDocName}」移动到：`
+    : "没有其他知识库可供移动";
+  moveFolderList.innerHTML = targets.length
+    ? targets.map(f => `
+        <div class="move-folder-item" data-fid="${f.id}" data-fname="${escapeHtml(f.name)}">
+          <i data-lucide="${f.system ? "inbox" : "folder"}"></i>
+          <span class="mname" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          <span class="mcount">${f.docs} 个文件</span>
+        </div>`).join("")
+    : '<div class="empty-tip" style="padding:20px;text-align:center">暂无其他知识库，请先新建</div>';
+  moveModal.classList.add("show");
+  refreshIcons();
+}
+
+function closeMoveModal() {
+  moveModal.classList.remove("show");
+  movingDocId = null;
+  movingDocName = "";
+}
+
+document.getElementById("moveModalClose").onclick = closeMoveModal;
+// 点击遮罩层关闭
+moveModal.addEventListener("click", (e) => {
+  if (e.target === moveModal) closeMoveModal();
+});
+// 点击目标知识库执行移动
+moveFolderList.addEventListener("click", (e) => {
+  const item = e.target.closest(".move-folder-item");
+  if (!item || !movingDocId) return;
+  const fid = item.dataset.fid;
+  const fname = item.dataset.fname;
+  moveDoc(movingDocId, fid, fname);
+  closeMoveModal();
+});
+
+// ==================== 文件上传 ====================
+
 fileInput.onchange = async () => {
   const files = Array.from(fileInput.files);
   if (!files.length) return;
 
-  const extOf = (f) => f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
-  const isDoc = (f) => [".txt", ".md", ".pdf"].includes(extOf(f));
-  const isData = (f) => [".csv", ".xlsx", ".xls"].includes(extOf(f));
-  // 知识库可收的文件：TXT/MD/PDF/CSV（Excel 仅支持数据分析模式）
-  const isKbFile = (f) => isDoc(f) || extOf(f) === ".csv";
-
-  // 数据分析模式下选了 TXT/MD/PDF：自动切换到知识库模式并入库
-  let autoSwitched = false;
-  if (mode === "analysis" && files.some(isDoc)) {
-    setMode("rag");
-    autoSwitched = true;
-  }
-
-  const inRag = mode === "rag";
-  const current = inRag ? kbDocs : datasets;
-  const maxN = inRag ? MAX_KB_DOCS : MAX_DATASETS;
-
-  // 按模式过滤：知识库收 TXT/MD/PDF/CSV，数据分析收 CSV/Excel
-  const okFiles = files.filter((f) => (inRag ? isKbFile(f) : isData(f)));
-  const wrongFiles = files.filter((f) => (inRag ? !isKbFile(f) : !isData(f)));
+  const tabular = files.filter(f => TAB_EXT.includes(extOf(f)));
+  const docs = files.filter(f => DOC_EXT.includes(extOf(f)));
+  const unsupported = files.filter(f => !TAB_EXT.includes(extOf(f)) && !DOC_EXT.includes(extOf(f)));
+  const errors = unsupported.map(f => `${f.name}：不支持的文件类型`);
+  let success = 0;
+  let mountedNow = 0;
+  let mountSkipped = 0;
 
   uploadBtn.disabled = true;
   folderBtn.disabled = true;
-  uploadBtn.textContent = "…";
-
-  let okCount = 0;
-  const errors = wrongFiles.map((f) =>
-    inRag
-      ? `${f.name}（知识库支持 TXT/MD/PDF/CSV，Excel 请切到 📊 数据分析 模式上传）`
-      : `${f.name}（TXT/MD/PDF 请切到 📚 知识库问答 模式上传）`
-  );
-
-  const room = maxN - current.length;
-  const toUpload = okFiles.slice(0, room);
-  const skipped = okFiles.length - toUpload.length;
-
-  for (const file of toUpload) {
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const resp = await fetch(inRag ? "/kb/upload" : "/upload", { method: "POST", body: fd });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.detail || "上传失败");
-      if (inRag) {
-        kbDocs.push({ doc_id: data.doc_id, filename: data.filename, chunks: data.chunks });
-      } else {
-        datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
-      }
-      okCount++;
-    } catch (e) {
-      errors.push(`${file.name}（${e.message}）`);
+  try {
+    // 表格文件：同步解析摘要（数据分析）+ 后台异步向量化（RAG）
+    for (const f of tabular) {
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const r = await fetch("/upload", { method: "POST", body: fd });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "上传失败");
+        success++;
+        if (mode === "analysis") {
+          if (datasets.length < MAX_DATASETS) {
+            datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
+            mountedNow++;
+          } else {
+            mountSkipped++;
+          }
+        }
+      } catch (e) { errors.push(`${f.name}：${e.message}`); }
     }
+    // 文本文档：登记后立即返回，后台异步解析
+    for (const f of docs) {
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const r = await fetch("/kb/upload", { method: "POST", body: fd });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || "上传失败");
+        success++;
+      } catch (e) { errors.push(`${f.name}：${e.message}`); }
+    }
+  } finally {
+    uploadBtn.disabled = false;
+    folderBtn.disabled = false;
+    fileInput.value = "";
   }
 
-  renderFilePopover();
+  await refreshKbData();
+  schedulePoll();
 
-  // 汇总本次上传结果
-  const bubble = addBubble("assistant");
-  const lines = [];
-  if (autoSwitched) lines.push("检测到文本文档，已自动切换到 📚 知识库问答 模式。");
-  if (inRag) {
-    if (okCount) lines.push(`成功入库 ${okCount} 个文档，知识库现有 ${kbDocs.length} 个（点 📁 查看），可以开始提问了。`);
-  } else {
-    if (okCount) lines.push(`成功加载 ${okCount} 个文件，当前共 ${datasets.length} 个（点 📁 查看）。`);
+  if (success > 0) {
+    let msg = `上传成功，${success} 个文件已进入「临时文件」，正在后台解析`;
+    if (mountedNow) msg += `；${mountedNow} 个表格已挂载用于数据分析`;
+    toast(msg, "ok");
   }
-  if (errors.length) lines.push("以下文件失败：" + errors.join("；"));
-  if (skipped > 0) lines.push(`已达 ${maxN} 个上限，${skipped} 个未上传，请先在 📁 中移除部分文件。`);
-  bubble.textContent = lines.join("\n");
-  if (errors.length || skipped > 0) bubble.parentElement.classList.add("error");
-
-  uploadBtn.disabled = false;
-  folderBtn.disabled = false;
-  uploadBtn.textContent = "📎";
-  fileInput.value = "";
+  if (mountSkipped) {
+    errors.push(`已达 ${MAX_DATASETS} 个挂载上限，${mountSkipped} 个表格未挂载（文件已入库，可稍后在知识库管理中手动挂载）`);
+  }
+  if (errors.length) {
+    const bubble = addBubble("assistant");
+    bubble.parentElement.classList.add("error");
+    bubble.textContent = "以下文件处理失败：\n" + errors.join("\n");
+  }
 };
+
+// ==================== 对话（SSE 流式） ====================
 
 async function send(text) {
   sending = true;
@@ -643,7 +1056,7 @@ async function send(text) {
     let reply = "";
     let resultHtml = "";
     let sourcesHtml = "";
-    const pendingCharts = [];  // [{id, option}]
+    const pendingCharts = [];
 
     while (true) {
       const { done, value } = await reader.read();
@@ -661,7 +1074,7 @@ async function send(text) {
 
         if (payload.type === "content") {
           reply += payload.content;
-          bubble.textContent = reply;  // 流式阶段按纯文本显示
+          bubble.textContent = reply;
         } else if (payload.type === "result") {
           resultHtml = '<div class="result">';
           if (payload.stdout && payload.stdout.trim()) {
@@ -676,13 +1089,12 @@ async function send(text) {
             resultHtml += `<div class="label">结果表格</div>${renderTable(payload.table)}`;
           }
           if (payload.error) {
-            resultHtml += `<div class="err">⚠ ${escapeHtml(payload.error)}</div>`;
+            resultHtml += `<div class="err"><i data-lucide="alert-triangle"></i>${escapeHtml(payload.error)}</div>`;
           }
           resultHtml += "</div>";
         } else if (payload.type === "sources") {
-          // RAG 引用来源
           if (payload.sources && payload.sources.length) {
-            sourcesHtml = '<div class="sources"><div class="label">📎 依据来源</div>' +
+            sourcesHtml = '<div class="sources"><div class="label"><i data-lucide="bookmark"></i>依据来源</div>' +
               payload.sources.map(s =>
                 `<details><summary>《${escapeHtml(s.filename)}》</summary><p>${escapeHtml(s.snippet)}…</p></details>`
               ).join("") + "</div>";
@@ -695,12 +1107,11 @@ async function send(text) {
       }
     }
 
-    // 流结束后，把整段回复格式化为 文本+代码块，并追加执行结果 / 引用来源
     bubble.classList.remove("cursor");
     bubble.innerHTML = formatMessage(reply) + resultHtml + sourcesHtml;
+    refreshIcons();
     messages.push({ role: "assistant", content: reply });
     chatEl.scrollTop = chatEl.scrollHeight;
-    // DOM 挂载后再初始化图表（容器此时才有真实尺寸）
     for (const c of pendingCharts) {
       renderChart(document.getElementById(c.id), c.option);
     }

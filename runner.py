@@ -6,6 +6,7 @@ manifest JSON 格式：[{"path": 数据文件路径, "ext": 扩展名}, ...]
 
 约定：
 - 各数据集按顺序加载为 DataFrame 变量 df1、df2、……（df 等价于 df1），pd / np 可用
+- 预装库：scipy、sklearn、statsmodels（顶层已导入，子模块可自行 import）
 - 模型把最终表格结果赋值给 result（DataFrame）
 - 模型可赋值 chart（dict）作为 ECharts option，用于前端图表渲染
 - print() 输出的内容会被收集为文本结论
@@ -18,6 +19,20 @@ import sys
 
 import numpy as np
 import pandas as pd
+
+# 预导入常用数据分析/机器学习库到沙箱顶层，模型也可自行 import 子模块
+try:
+    import scipy
+except ImportError:
+    scipy = None
+try:
+    import sklearn
+except ImportError:
+    sklearn = None
+try:
+    import statsmodels
+except ImportError:
+    statsmodels = None
 
 
 def load_dataframe(path, ext):
@@ -35,7 +50,7 @@ def main():
     manifest = json.loads(sys.argv[2])
 
     # 1. 按顺序加载所有数据集：df1、df2、……
-    env = {"pd": pd, "np": np}
+    env = {"pd": pd, "np": np, "scipy": scipy, "sklearn": sklearn, "statsmodels": statsmodels}
     for i, item in enumerate(manifest, start=1):
         env[f"df{i}"] = load_dataframe(item["path"], item["ext"])
     if manifest:

@@ -266,6 +266,15 @@ def kb_doc_move(doc_id: str, payload: dict):
     return {"ok": True}
 
 
+@app.patch("/kb/documents/{doc_id}/active")
+def kb_doc_active(doc_id: str, payload: dict):
+    """切换单个文档是否参与检索：{"active": true|false}"""
+    try:
+        return kb.set_doc_active(doc_id, bool(payload.get("active", True)))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 def extract_code(reply: str) -> Optional[str]:
     """从模型回复中提取 ```python 代码块"""
     m = re.search(r"```(?:python)?\s*\n?(.*?)```", reply, re.S)
@@ -338,7 +347,9 @@ def chat(req: ChatRequest):
         # 多轮追问先改写成独立问题再检索（"那华南呢"→"华南地区的销售额是多少"），失败自动回退原问题
         search_query = llm.rewrite_question(req.messages[:-1], question)
         try:
-            docs = kb.retrieve(search_query, k=kb.TOP_K, folder_ids=kb.active_folder_ids())
+            docs = kb.retrieve(search_query, k=kb.TOP_K,
+                               folder_ids=kb.active_folder_ids(),
+                               doc_ids=kb.active_doc_ids())
             context_text, sources = kb.build_context(docs)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"知识库检索失败：{e}")
@@ -350,8 +361,10 @@ def chat(req: ChatRequest):
         kb_context = ""
         try:
             if question and kb.doc_count() > 0:
-                # 分析时也只参考激活文件夹内的业务规则（与问答一致的按需范围）
-                docs = kb.retrieve(question, k=3, folder_ids=kb.active_folder_ids())
+                # 分析时也只参考激活知识库和激活文件内的业务规则
+                docs = kb.retrieve(question, k=3,
+                                   folder_ids=kb.active_folder_ids(),
+                                   doc_ids=kb.active_doc_ids())
                 if docs:
                     kb_context, sources = kb.build_context(docs)
         except Exception:

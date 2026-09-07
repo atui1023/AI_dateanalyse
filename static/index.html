@@ -610,6 +610,9 @@ function fileRowHtml(d) {
   const targets = kbFolders.filter(f => f.id !== fid);
 
   return `<div class="file-row" data-id="${d.doc_id}">
+    <span class="fcheck-wrap" title="勾选后该文件参与检索">
+      <input type="checkbox" class="fcheck doc-check" data-did="${d.doc_id}" ${d.active !== false ? "checked" : ""}>
+    </span>
     <i data-lucide="${isTab ? "file-spreadsheet" : "file-text"}" class="file-ico"></i>
     <span class="fname" title="${escapeHtml(d.filename)}">${escapeHtml(d.filename)}</span>
     ${status}
@@ -656,7 +659,10 @@ function renderFilePopover() {
   }
 
   if (kbFolders.length && !kbFolders.some(f => f.active)) {
-    html += '<div class="warn-tip">未勾选任何知识库：检索将覆盖全部文件</div>';
+    const anyDocActive = kbDocs.some(d => d.active !== false);
+    html += anyDocActive
+      ? '<div class="warn-tip">未勾选知识库，但已勾选个别文件：检索仅在勾选的文件范围内</div>'
+      : '<div class="warn-tip">未勾选任何知识库或文件：检索将覆盖全部文件</div>';
   }
   html += `<div class="folder-add"><input id="newFolderName" placeholder="新建知识库名称" maxlength="20"><button id="addFolderBtn" type="button">新建</button></div>`;
 
@@ -693,8 +699,10 @@ document.getElementById("fileList").addEventListener("dblclick", (e) => {
 
 // 勾选 = 切换检索范围
 document.getElementById("fileList").addEventListener("change", (e) => {
-  const cb = e.target.closest('input.fcheck[data-fid]');
-  if (cb) patchFolder(cb.dataset.fid, { active: cb.checked });
+  const fb = e.target.closest('input.fcheck[data-fid]');
+  if (fb) { patchFolder(fb.dataset.fid, { active: fb.checked }); return; }
+  const db = e.target.closest('input.doc-check[data-did]');
+  if (db) { patchDocActive(db.dataset.did, db.checked); }
 });
 
 // 新建知识库输入框回车
@@ -841,7 +849,23 @@ async function refreshKbData() {
   renderFilePopover();
 }
 
-// 有文件处于“解析中”时，每 2 秒轮询状态；全部结束后自动停止
+async function patchDocActive(did, active) {
+  try {
+    const r = await fetch(`/kb/documents/${encodeURIComponent(did)}/active`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "操作失败", "err");
+    }
+  } catch (e) { /* 网络失败，下次再试 */ }
+  // 只更新数据，不重建弹层 DOM（保持滚动位置和展开状态）
+  await Promise.all([loadFolders(), loadDocs()]);
+  renderFilePopover();
+}
+
+// 有文件处于"解析中"时，每 2 秒轮询状态；全部结束后自动停止
 function schedulePoll() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
@@ -894,10 +918,11 @@ folderBtn.onclick = (e) => {
   if (filePopover.classList.contains("show")) refreshKbData();
 };
 
-// 点击外部：关闭知识库弹层
+// 点击外部：关闭知识库弹层（移动模态框打开时不触发，避免误关）
 document.addEventListener("click", (e) => {
   if (!e.target.isConnected) return;
   if (!filePopover.classList.contains("show")) return;
+  if (moveModal.classList.contains("show")) return;  // 移动弹窗打开时，不处理关闭
   if (!filePopover.contains(e.target) && !folderBtn.contains(e.target)) {
     filePopover.classList.remove("show");
   }
@@ -943,14 +968,16 @@ document.getElementById("moveModalClose").onclick = closeMoveModal;
 moveModal.addEventListener("click", (e) => {
   if (e.target === moveModal) closeMoveModal();
 });
-// 点击目标知识库执行移动
-moveFolderList.addEventListener("click", (e) => {
+// 点击目标知识库执行移动（async + stopPropagation 防止冒泡关闭弹层）
+moveFolderList.addEventListener("click", async (e) => {
   const item = e.target.closest(".move-folder-item");
   if (!item || !movingDocId) return;
+  e.stopPropagation();  // 阻止冒泡到 document，避免误关知识库弹层
   const fid = item.dataset.fid;
   const fname = item.dataset.fname;
-  moveDoc(movingDocId, fid, fname);
-  closeMoveModal();
+  const docId = movingDocId;  // 先保存，closeMoveModal 会清空 movingDocId
+  closeMoveModal();  // 先关闭模态框
+  await moveDoc(docId, fid, fname);  // 再执行移动+刷新数据
 });
 
 // ==================== 文件上传 ====================

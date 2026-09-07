@@ -151,8 +151,9 @@ def _get_splitter():
 
 # ==================== 文档注册表（kb_docs.json） ====================
 # 数据模型：
-#   Document: {doc_id, filename, path, ext, folder_id, status, chunks, error, created_at}
+#   Document: {doc_id, filename, path, ext, folder_id, status, chunks, error, created_at, active}
 #   folder_id 软关联 Folder.id；文件移动只改此外键（向量块 metadata 同步更新），不重新向量化
+#   active 控制单个文件是否参与检索（默认 True）；文件夹未勾选时整库都不参与
 
 def _backfill_docs_from_chroma() -> List[dict]:
     """首次启动且注册表不存在时，从 Chroma 已有向量回填注册表（兼容旧版本数据）"""
@@ -178,6 +179,7 @@ def _backfill_docs_from_chroma() -> List[dict]:
                 "status": STATUS_READY,
                 "chunks": 0,
                 "error": "",
+                "active": True,
                 "created_at": datetime.now().isoformat(timespec="seconds"),
             }
         by_doc[did]["chunks"] += 1
@@ -200,6 +202,10 @@ def _load_docs() -> List[dict]:
     for d in docs:
         if d.get("folder_id") not in valid_folders:
             d["folder_id"] = TEMP_FOLDER_ID
+            changed = True
+        # 兼容旧数据：补充 active 字段（默认 True）
+        if "active" not in d:
+            d["active"] = True
             changed = True
     if changed:
         _save_docs(docs)
@@ -247,6 +253,7 @@ def register_document(path: str, ext: str, filename: str,
         "status": STATUS_PARSING,
         "chunks": 0,
         "error": "",
+        "active": True,  # 默认参与检索
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     _upsert_doc(doc)
@@ -401,17 +408,29 @@ def move_document(doc_id: str, folder_id: str) -> dict:
 
 # ==================== 检索 ====================
 
-def retrieve(query: str, k: int = TOP_K, folder_ids: Optional[List[str]] = None):
+def retrieve(query: str, k: int = TOP_K,
+             folder_ids: Optional[List[str]] = None,
+             doc_ids: Optional[List[str]] = None):
     """按语义相似度召回 top-k 资料块。
 
     folder_ids 不为空时只在这些知识库内检索（按需加载的核心：向量库保留全部数据，
     检索时用 Chroma where 过滤，勾选即时生效）；为空表示未勾选任何知识库，回退全库检索。
+    doc_ids 不为空时进一步只检索这些文档（文件级勾选，与 folder_ids 取交集）。
     解析中/失败的文档没有向量块，天然不会被召回。
     """
-    if folder_ids:
-        return get_vectordb().similarity_search(
-            query, k=k, filter={"folder_id": {"$in": folder_ids}}
-        )
+    filter_cond = None
+    if folder_ids and doc_ids:
+        filter_cond = {"$and": [
+            {"folder_id": {"$in": folder_ids}},
+            {"doc_id": {"$in": doc_ids}},
+        ]}
+    elif folder_ids:
+        filter_cond = {"folder_id": {"$in": folder_ids}}
+    elif doc_ids:
+        filter_cond = {"doc_id": {"$in": doc_ids}}
+
+    if filter_cond:
+        return get_vectordb().similarity_search(query, k=k, filter=filter_cond)
     return get_vectordb().similarity_search(query, k=k)
 
 
@@ -437,6 +456,24 @@ def active_folder_ids() -> Optional[List[str]]:
     """当前激活（勾选）的知识库 id 列表；全部未勾选时返回 None（回退全库检索）"""
     ids = [x["id"] for x in _load_folders() if x.get("active")]
     return ids or None
+
+
+def active_doc_ids() -> Optional[List[str]]:
+    """当前激活（勾选）的文档 id 列表；全部未勾选时返回 None（不额外过滤）。
+    与文件夹勾选叠加：文件夹未勾选则整库不检索，文件级勾选在文件夹基础上进一步收窄。
+    """
+    ids = [d["doc_id"] for d in _load_docs() if d.get("active", True)]
+    return ids or None
+
+
+def set_doc_active(doc_id: str, active: bool) -> dict:
+    """切换单个文档的激活状态（是否参与检索）"""
+    doc = _find_doc(doc_id)
+    if doc is None:
+        raise ValueError("文档不存在或已删除")
+    doc["active"] = bool(active)
+    _upsert_doc(doc)
+    return {"doc_id": doc_id, "active": bool(active)}
 
 
 # ==================== 知识库（文件夹）管理 ====================

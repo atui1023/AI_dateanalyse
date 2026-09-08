@@ -1,0 +1,39 @@
+{
+  "folders": [
+    {
+      "id": "default",
+      "name": "临时文件",
+      "active": false,
+      "created_at": "2026-09-06T18:40:00",
+      "system": true
+    },
+    {
+      "id": "958cce289aaf4170b561a4ef8c421c29",
+      "name": "数据分析方法",
+      "active": false,
+      "created_at": "2026-09-06T19:42:17",
+      "system": false
+    },
+    {
+      "id": "ba4bd96e19ef43b5823d19969ed4a16f",
+      "name": "数据集",
+      "active": false,
+      "created_at": "2026-09-06T19:53:39",
+      "system": false
+    },
+    {
+      "id": "9317d3f3964b4373ad0ed90073c75140",
+      "name": "测试文档",
+      "active": false,
+      "created_at": "2026-09-06T19:56:58",
+      "system": false
+    },
+    {
+      "id": "90d5e1850840404e8d018d388bcd3154",
+      "name": "实习用",
+      "active": false,
+      "created_at": "2026-09-07T08:41:45",
+      "system": false
+    }
+  ]
+}

@@ -312,20 +312,33 @@ def run_analysis(active_datasets: List[dict], code: str) -> dict:
     output = proc.stdout or ""
     marker_ok = "===RUNNER_OK==="
     marker_err = "===RUNNER_ERR==="
-    if marker_ok in output:
-        payload = output.split(marker_ok, 1)[1].strip()
+
+    def _parse_after(marker: str) -> Optional[dict]:
+        """取最后一个标记后的内容，用 raw_decode 容错解析 JSON（忽略尾部垃圾）"""
+        idx = output.rfind(marker)
+        if idx < 0:
+            return None
+        rest = output[idx + len(marker):]
+        brace = rest.find("{")
+        if brace < 0:
+            return None
         try:
-            return json.loads(payload)
+            data, _ = json.JSONDecoder().raw_decode(rest[brace:])
+            return data
         except json.JSONDecodeError:
-            return {"error": "结果解析失败"}
-    if marker_err in output:
-        payload = output.split(marker_err, 1)[1].strip()
-        try:
-            data = json.loads(payload)
-            return {"error": f"代码执行出错：{data.get('error', '未知错误')}", "stdout": data.get("stdout", "")}
-        except json.JSONDecodeError:
-            pass
-    return {"error": f"代码执行失败：{(proc.stderr or '未知错误')[:300]}"}
+            return None
+
+    ok_data = _parse_after(marker_ok)
+    if ok_data is not None:
+        return ok_data
+    err_data = _parse_after(marker_err)
+    if err_data is not None:
+        return {"error": f"代码执行出错：{err_data.get('error', '未知错误')}", "stdout": err_data.get("stdout", "")}
+    # 兜底：runner 未输出任何标记（进程异常退出），把返回码和输出片段一并返回便于定位
+    err_tail = (proc.stderr or "").strip()
+    out_tail = output.strip()[-200:]
+    detail = err_tail or out_tail or "进程无任何输出"
+    return {"error": f"代码执行失败（退出码 {proc.returncode}）：{detail[:300]}"}
 
 
 def sse(data: dict) -> str:

@@ -1,0 +1,124 @@
+{
+  "docs": [
+    {
+      "doc_id": "b5bba3c4525245aca5103c3365a0e090",
+      "filename": "08ba9b6a190c4406a78d1e8651629427.csv",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\571adde63d3240f78ca05fea65446d2f.csv",
+      "ext": ".csv",
+      "folder_id": "default",
+      "status": "ready",
+      "chunks": 1,
+      "error": "",
+      "created_at": "2026-09-06T19:53:13",
+      "active": false
+    },
+    {
+      "doc_id": "0ea898e8345d4f239d4d8465bd2dee7f",
+      "filename": "数据分析.md",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\451f0440db9449acad3c7fc12bb8e1c8.md",
+      "ext": ".md",
+      "folder_id": "958cce289aaf4170b561a4ef8c421c29",
+      "status": "ready",
+      "chunks": 8,
+      "error": "",
+      "created_at": "2026-09-06T20:14:50",
+      "active": false
+    },
+    {
+      "doc_id": "ba29bd84ba15418fbe2963523b86c4fb",
+      "filename": "全域数据分析方法.md",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\a841f1adf5434081af16a87f4f886e4c.md",
+      "ext": ".md",
+      "folder_id": "958cce289aaf4170b561a4ef8c421c29",
+      "status": "ready",
+      "chunks": 14,
+      "error": "",
+      "created_at": "2026-09-06T20:44:07",
+      "active": false
+    },
+    {
+      "doc_id": "9120b43dbaa44d45b4c6967d0756c486",
+      "filename": "Log.txt",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\3964d02ea8bc44c0a423eb59260ba91f.txt",
+      "ext": ".txt",
+      "folder_id": "9317d3f3964b4373ad0ed90073c75140",
+      "status": "ready",
+      "chunks": 7,
+      "error": "",
+      "created_at": "2026-09-07T08:25:50",
+      "active": false
+    },
+    {
+      "doc_id": "1832bc87e58f44c98e605fdf51d1b844",
+      "filename": "实训工作计划要求.md",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\1caa8ec4c39c4882903c81226d3b823c.md",
+      "ext": ".md",
+      "folder_id": "default",
+      "status": "ready",
+      "chunks": 2,
+      "error": "",
+      "created_at": "2026-09-07T08:41:16",
+      "active": false
+    },
+    {
+      "doc_id": "b81935da10574627bd7131c6e91911cb",
+      "filename": "数据计算实训-实训工作计划.md",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\f113053fa18e4c42a42eed0ce3f125ae.md",
+      "ext": ".md",
+      "folder_id": "958cce289aaf4170b561a4ef8c421c29",
+      "status": "ready",
+      "chunks": 17,
+      "error": "",
+      "created_at": "2026-09-07T08:41:16",
+      "active": false
+    },
+    {
+      "doc_id": "f7f064c1750c4ab48cfb67f714f104d6",
+      "filename": "机器学习实训-实训工作计划.md",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\422db026f13048fcb9c4202c54725089.md",
+      "ext": ".md",
+      "folder_id": "90d5e1850840404e8d018d388bcd3154",
+      "status": "ready",
+      "chunks": 30,
+      "error": "",
+      "created_at": "2026-09-07T08:41:21",
+      "active": false
+    },
+    {
+      "doc_id": "17f5badb96154e61bee0d32c5c867252",
+      "filename": "专业实习-实训工作计划.md",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\326d1955c23942dabbb39c7d7bd9d681.md",
+      "ext": ".md",
+      "folder_id": "90d5e1850840404e8d018d388bcd3154",
+      "status": "ready",
+      "chunks": 31,
+      "error": "",
+      "created_at": "2026-09-07T08:41:25",
+      "active": false
+    },
+    {
+      "doc_id": "c2e0c772a883424ca804d5d82aff3d5a",
+      "filename": "clean_final_data.csv",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\9f8c1dcd9e654b27af867e2ee21972b7.csv",
+      "ext": ".csv",
+      "folder_id": "default",
+      "status": "ready",
+      "chunks": 500,
+      "error": "",
+      "active": true,
+      "created_at": "2026-09-08T08:34:26"
+    },
+    {
+      "doc_id": "dc62e8ac9fdc4b10b006fb51f6713a7f",
+      "filename": "test.csv",
+      "path": "F:\\Trae CN\\aidataanalysis\\uploads\\kb\\04fef79d7bca4463b292c84cf4782b23.csv",
+      "ext": ".csv",
+      "folder_id": "default",
+      "status": "ready",
+      "chunks": 500,
+      "error": "",
+      "active": true,
+      "created_at": "2026-09-08T09:05:16"
+    }
+  ]
+}

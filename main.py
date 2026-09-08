@@ -18,6 +18,7 @@ import auth
 import kb
 import llm
 from auth import get_current_user
+# 审计日志通过 auth.log_action 调用（用模块前缀更清晰，避免和本地变量混淆）
 from db import (
     AnalysisResult, ChatMessage, Session as DbSession, User, ensure_default_user, get_session,
 )
@@ -188,7 +189,7 @@ def kb_mount(doc_id: str, user: User = Depends(get_current_user)):
 
 
 @app.post("/kb/upload")
-async def kb_upload(file: UploadFile = File(...), folder_id: str = Form(None),
+async def kb_upload(request: Request, file: UploadFile = File(...), folder_id: str = Form(None),
                     user: User = Depends(get_current_user)):
     """上传文档（TXT/MD/PDF/CSV/Excel）：立即登记进知识库并返回，
     后台异步完成 解析 → 切分 → 向量化（状态可通过 /kb/documents 轮询）。
@@ -209,6 +210,8 @@ async def kb_upload(file: UploadFile = File(...), folder_id: str = Form(None),
         f.write(content)
 
     doc = kb.register_document(save_path, ext, filename, folder_id=folder_id, user_id=user.id)
+    auth.log_action(user.id, "upload_doc", "document", doc["doc_id"],
+                    detail=f"upload {filename} ({ext})", ip=auth._client_ip(request))
     return {"doc_id": doc["doc_id"], "filename": doc["filename"], "status": doc["status"]}
 
 
@@ -219,7 +222,7 @@ def kb_documents(user: User = Depends(get_current_user)):
 
 
 @app.delete("/kb/documents/{doc_id}")
-def kb_delete(doc_id: str, user: User = Depends(get_current_user)):
+def kb_delete(doc_id: str, request: Request, user: User = Depends(get_current_user)):
     """删除知识库文档：同步清理向量块/向量（防幽灵数据）+ 注册表记录 + 磁盘文件 + 分析挂载"""
     rec = kb.delete_document(doc_id, user_id=user.id)
     datasets.pop(doc_id, None)  # 若正挂载为 df，一并取消挂载
@@ -228,6 +231,9 @@ def kb_delete(doc_id: str, user: User = Depends(get_current_user)):
             os.remove(rec["path"])
         except OSError:
             pass
+    auth.log_action(user.id, "delete_doc", "document", doc_id,
+                    detail=f"delete {rec.get('filename', '') if rec else ''}",
+                    ip=auth._client_ip(request))
     return {"ok": True}
 
 
@@ -273,12 +279,14 @@ def kb_folder_update(folder_id: str, payload: dict, user: User = Depends(get_cur
 
 
 @app.delete("/kb/folders/{folder_id}")
-def kb_folder_delete(folder_id: str, user: User = Depends(get_current_user)):
+def kb_folder_delete(folder_id: str, request: Request, user: User = Depends(get_current_user)):
     """删除知识库：其下文件自动退回系统“临时文件”库（仅改外键，向量数据不丢失）"""
     try:
         moved = kb.delete_folder(folder_id, user_id=user.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    auth.log_action(user.id, "delete_folder", "folder", folder_id,
+                    detail=f"moved {moved} docs to temp", ip=auth._client_ip(request))
     return {"ok": True, "moved_docs": moved}
 
 
@@ -560,12 +568,14 @@ def rename_session(session_id: str, payload: dict, user: User = Depends(get_curr
         s.title = title[:100]
         s.updated_at = datetime.now()
         db.commit()
-    return {"session_id": session_id, "title": s.title}
+        # 在 session 关闭前提取 title，避免 detached ORM 对象触发懒加载异常
+        new_title = s.title
+    return {"session_id": session_id, "title": new_title}
 
 
 @app.delete("/sessions/{session_id}")
-def delete_session(session_id: str, user: User = Depends(get_current_user)):
-    """删除会话（级联删消息和分析结果）"""
+def delete_session(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    """删除会话（仅限本人会话）"""
     with get_session() as db:
         s = db.get(DbSession, session_id)
         if s is None or s.user_id != user.id:
@@ -575,6 +585,8 @@ def delete_session(session_id: str, user: User = Depends(get_current_user)):
         db.query(AnalysisResult).filter(AnalysisResult.session_id == session_id).delete()
         db.delete(s)
         db.commit()
+    auth.log_action(user.id, "delete_session", "session", session_id,
+                    ip=auth._client_ip(request))
     return {"ok": True}
 
 
@@ -600,7 +612,11 @@ def get_session_messages(session_id: str, user: User = Depends(get_current_user)
 @app.get("/")
 def index():
     # 根路由不鉴权：前端在加载时调 /auth/me 判断登录态
-    return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
+    # 加 no-cache 头：避免浏览器缓存旧版前端，每次启动都拉最新 HTML
+    return FileResponse(
+        os.path.join(BASE_DIR, "static", "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 # 启动时确保默认 admin 用户存在（用 .env 的 ADMIN_PASSWORD 生成 bcrypt 哈希）

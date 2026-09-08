@@ -10,5 +10,6 @@ ws.CurrentDirectory = projDir
 ws.Run "cmd /c .venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000 > server.log 2>&1", 0, False
 
 ' Wait for the server to be ready, then open the browser.
+' URL 加 ?v=时间戳：每次启动都是新 URL，强制浏览器拉最新 HTML，避免缓存旧版前端
 WScript.Sleep 3000
-ws.Run "http://127.0.0.1:8000/"
+ws.Run "http://127.0.0.1:8000/?v=" & DateDiff("s", "1970-01-01 00:00:00", Now)

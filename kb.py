@@ -158,6 +158,7 @@ def _doc_to_dict(d: KbDocument) -> dict:
     """ORM -> dict（保持与旧 JSON 结构兼容，供上层无感知使用）"""
     return {
         "doc_id": d.doc_id,
+        "user_id": d.user_id,
         "filename": d.filename,
         "path": d.file_path,
         "ext": d.file_ext,
@@ -170,16 +171,22 @@ def _doc_to_dict(d: KbDocument) -> dict:
     }
 
 
-def _load_docs() -> List[dict]:
-    """从 MySQL 读取全部文档（含自愈：归属已删除知识库的退回临时文件区）"""
+def _load_docs(user_id: int = DEFAULT_USER_ID) -> List[dict]:
+    """从 MySQL 读取该用户的全部文档（含自愈：归属已删除知识库的退回临时文件区）"""
     with get_session() as db:
-        valid_folders = {f.id for f in db.query(KbFolder).all()}
-        rows = db.query(KbDocument).order_by(KbDocument.created_at.desc()).all()
+        valid_folders = {f.id for f in db.query(KbFolder).filter(KbFolder.user_id == user_id).all()}
+        sys_folder = db.query(KbFolder).filter(
+            KbFolder.is_system == True, KbFolder.user_id == user_id
+        ).first()
+        temp_id = sys_folder.id if sys_folder else TEMP_FOLDER_ID
+        rows = db.query(KbDocument).filter(KbDocument.user_id == user_id).order_by(
+            KbDocument.created_at.desc()
+        ).all()
         docs = []
         changed = False
         for d in rows:
             if d.folder_id not in valid_folders:
-                d.folder_id = TEMP_FOLDER_ID
+                d.folder_id = temp_id
                 changed = True
             docs.append(_doc_to_dict(d))
         if changed:
@@ -187,9 +194,14 @@ def _load_docs() -> List[dict]:
         return docs
 
 
-def _find_doc(doc_id: str) -> Optional[dict]:
+def _find_doc(doc_id: str, user_id: Optional[int] = DEFAULT_USER_ID) -> Optional[dict]:
+    # doc_id 是主键，加 user_id 过滤是防跨用户访问的安全校验；
+    # 传 user_id=None 表示跳过过滤（后台 worker 不在用户请求上下文中使用）。
     with get_session() as db:
-        d = db.get(KbDocument, doc_id)
+        q = db.query(KbDocument).filter(KbDocument.doc_id == doc_id)
+        if user_id is not None:
+            q = q.filter(KbDocument.user_id == user_id)
+        d = q.first()
         return _doc_to_dict(d) if d else None
 
 
@@ -200,7 +212,7 @@ def _upsert_doc(doc: dict) -> None:
         if d is None:
             d = KbDocument(
                 doc_id=doc["doc_id"],
-                user_id=DEFAULT_USER_ID,
+                user_id=doc.get("user_id", DEFAULT_USER_ID),
                 folder_id=doc.get("folder_id") or TEMP_FOLDER_ID,
                 filename=doc["filename"],
                 file_path=doc["path"],
@@ -226,16 +238,20 @@ def _upsert_doc(doc: dict) -> None:
 # ==================== 上传登记 + 异步向量化 ====================
 
 def register_document(path: str, ext: str, filename: str,
-                      folder_id: Optional[str] = None) -> dict:
+                      folder_id: Optional[str] = None,
+                      user_id: int = DEFAULT_USER_ID) -> dict:
     """登记新上传的文档：状态置为“解析中”并入队后台向量化，立即返回（上传不阻塞）"""
-    valid_ids = [f["id"] for f in _load_folders()]
+    folders = _load_folders(user_id)
+    valid_ids = [f["id"] for f in folders]
+    temp_id = next((f["id"] for f in folders if f.get("system")), TEMP_FOLDER_ID)
     doc = {
         "doc_id": uuid.uuid4().hex,
+        "user_id": user_id,
         "filename": filename,
         "path": path,
         "ext": ext,
         # 兜底：未指定/无效归属一律进入系统“临时文件”区
-        "folder_id": folder_id if folder_id in valid_ids else TEMP_FOLDER_ID,
+        "folder_id": folder_id if folder_id in valid_ids else temp_id,
         "status": STATUS_PARSING,
         "chunks": 0,
         "error": "",
@@ -278,7 +294,9 @@ def _do_ingest(doc_id: str) -> None:
     成功：status=ready；失败：status=failed 并记录中文错误信息，
     同时清理可能已写入的部分向量，防止“幽灵数据”造成检索幻觉。
     """
-    doc = _find_doc(doc_id)
+    # worker 不在用户请求上下文中，不带 user_id 过滤；doc 字典自带 user_id，
+    # _upsert_doc 更新已存在记录时不会改 user_id（保留原值），保证归属正确。
+    doc = _find_doc(doc_id, user_id=None)
     if doc is None or doc["status"] == STATUS_READY:
         return
     try:
@@ -325,9 +343,9 @@ def _do_ingest(doc_id: str) -> None:
         _upsert_doc(doc)
 
 
-def retry_document(doc_id: str) -> dict:
+def retry_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """重试解析失败的文档（重新入队向量化）"""
-    doc = _find_doc(doc_id)
+    doc = _find_doc(doc_id, user_id)
     if doc is None:
         raise ValueError("文档不存在或已删除")
     if doc["status"] == STATUS_PARSING:
@@ -343,41 +361,43 @@ def retry_document(doc_id: str) -> dict:
 
 # ==================== 文档查询与管理 ====================
 
-def list_documents() -> List[dict]:
+def list_documents(user_id: int = DEFAULT_USER_ID) -> List[dict]:
     """列出全部文档（来自注册表，含解析状态；新的在前）"""
-    docs = _load_docs()
+    docs = _load_docs(user_id)
     return sorted(docs, key=lambda d: d.get("created_at", ""), reverse=True)
 
 
-def get_document(doc_id: str) -> dict:
-    doc = _find_doc(doc_id)
+def get_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
+    doc = _find_doc(doc_id, user_id)
     if doc is None:
         raise ValueError("文档不存在或已删除")
     return doc
 
 
-def delete_document(doc_id: str) -> Optional[dict]:
+def delete_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> Optional[dict]:
     """删除文档：同步删除向量库中该文档的全部 chunk/vector（防幽灵数据）+ 注册表记录。
     返回被删记录（供调用方清理磁盘文件与内存数据集）。"""
-    doc = _find_doc(doc_id)
+    doc = _find_doc(doc_id, user_id)
     try:
         get_vectordb()._collection.delete(where={"doc_id": doc_id})
     except Exception as e:
         print("kb delete vectors failed:", e, file=sys.stderr)
     if doc is not None:
         with get_session() as db:
-            d = db.get(KbDocument, doc_id)
+            d = db.query(KbDocument).filter(
+                KbDocument.doc_id == doc_id, KbDocument.user_id == user_id
+            ).first()
             if d:
                 db.delete(d)
                 db.commit()
     return doc
 
 
-def move_document(doc_id: str, folder_id: str) -> dict:
+def move_document(doc_id: str, folder_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """移动文档到指定知识库：仅更新外键（注册表 + 已写入向量块的 metadata），不重新向量化"""
-    if folder_id not in [f["id"] for f in _load_folders()]:
+    if folder_id not in [f["id"] for f in _load_folders(user_id)]:
         raise ValueError("目标知识库不存在")
-    doc = _find_doc(doc_id)
+    doc = _find_doc(doc_id, user_id)
     if doc is None:
         raise ValueError("文档不存在或已删除")
     doc["folder_id"] = folder_id
@@ -400,13 +420,17 @@ def move_document(doc_id: str, folder_id: str) -> dict:
 
 def retrieve(query: str, k: int = TOP_K,
              folder_ids: Optional[List[str]] = None,
-             doc_ids: Optional[List[str]] = None):
+             doc_ids: Optional[List[str]] = None,
+             user_id: int = DEFAULT_USER_ID):
     """按语义相似度召回 top-k 资料块。
 
     folder_ids 不为空时只在这些知识库内检索（按需加载的核心：向量库保留全部数据，
     检索时用 Chroma where 过滤，勾选即时生效）；为空表示未勾选任何知识库，回退全库检索。
     doc_ids 不为空时进一步只检索这些文档（文件级勾选，与 folder_ids 取交集）。
     解析中/失败的文档没有向量块，天然不会被召回。
+
+    注：向量库本身无 user_id 概念，folder_id 已按用户隔离（由调用方传入该用户的
+    folder_ids），故此处不再额外按 user_id 过滤；保留 user_id 参数仅为接口一致性。
     """
     filter_cond = None
     if folder_ids and doc_ids:
@@ -424,10 +448,14 @@ def retrieve(query: str, k: int = TOP_K,
     return get_vectordb().similarity_search(query, k=k)
 
 
-def doc_count() -> int:
-    """知识库向量块总数（用于判断库是否为空，避免无谓的检索/embedding 调用）"""
+def doc_count(user_id: int = DEFAULT_USER_ID) -> int:
+    """该用户已就绪文档数（用于判断库是否为空，避免无谓的检索/embedding 调用）"""
     try:
-        return get_vectordb()._collection.count()
+        with get_session() as db:
+            return db.query(KbDocument).filter(
+                KbDocument.user_id == user_id,
+                KbDocument.status == STATUS_READY,
+            ).count()
     except Exception:
         return 0
 
@@ -442,23 +470,23 @@ def build_context(docs) -> Tuple[str, List[dict]]:
     return "\n\n".join(parts), sources
 
 
-def active_folder_ids() -> Optional[List[str]]:
+def active_folder_ids(user_id: int = DEFAULT_USER_ID) -> Optional[List[str]]:
     """当前激活（勾选）的知识库 id 列表；全部未勾选时返回 None（回退全库检索）"""
-    ids = [x["id"] for x in _load_folders() if x.get("active")]
+    ids = [x["id"] for x in _load_folders(user_id) if x.get("active")]
     return ids or None
 
 
-def active_doc_ids() -> Optional[List[str]]:
+def active_doc_ids(user_id: int = DEFAULT_USER_ID) -> Optional[List[str]]:
     """当前激活（勾选）的文档 id 列表；全部未勾选时返回 None（不额外过滤）。
     与文件夹勾选叠加：文件夹未勾选则整库不检索，文件级勾选在文件夹基础上进一步收窄。
     """
-    ids = [d["doc_id"] for d in _load_docs() if d.get("active", True)]
+    ids = [d["doc_id"] for d in _load_docs(user_id) if d.get("active", True)]
     return ids or None
 
 
-def set_doc_active(doc_id: str, active: bool) -> dict:
+def set_doc_active(doc_id: str, active: bool, user_id: int = DEFAULT_USER_ID) -> dict:
     """切换单个文档的激活状态（是否参与检索）"""
-    doc = _find_doc(doc_id)
+    doc = _find_doc(doc_id, user_id)
     if doc is None:
         raise ValueError("文档不存在或已删除")
     doc["active"] = bool(active)
@@ -481,39 +509,50 @@ def _folder_to_dict(f: KbFolder) -> dict:
     }
 
 
-def _ensure_system_folder() -> None:
-    """确保系统“临时文件”知识库存在（自愈：误删/旧版名称时自动修复）"""
+def _ensure_system_folder(user_id: int = DEFAULT_USER_ID) -> str:
+    """确保该用户的系统“临时文件”知识库存在（自愈：误删/旧版名称时自动修复）。
+
+    每个用户各自拥有一个系统临时库：默认用户复用固定 id（TEMP_FOLDER_ID，
+    兼容旧数据），其它用户使用 "{TEMP_FOLDER_ID}_{user_id}" 作为 id。返回该库 id。
+    """
+    fid = TEMP_FOLDER_ID if user_id == DEFAULT_USER_ID else f"{TEMP_FOLDER_ID}_{user_id}"
     with get_session() as db:
-        f = db.get(KbFolder, TEMP_FOLDER_ID)
+        f = db.query(KbFolder).filter(
+            KbFolder.is_system == True, KbFolder.user_id == user_id
+        ).first()
         if f is None:
-            db.add(KbFolder(
-                id=TEMP_FOLDER_ID,
-                user_id=DEFAULT_USER_ID,
+            f = KbFolder(
+                id=fid,
+                user_id=user_id,
                 name=TEMP_FOLDER_NAME,
                 is_system=True,
                 is_active=True,
-            ))
+            )
+            db.add(f)
         else:
             f.is_system = True
             if f.name != TEMP_FOLDER_NAME:
                 f.name = TEMP_FOLDER_NAME
         db.commit()
+        return f.id
 
 
-def _load_folders() -> List[dict]:
-    """从 MySQL 读取知识库列表（系统库排最前）"""
-    _ensure_system_folder()
+def _load_folders(user_id: int = DEFAULT_USER_ID) -> List[dict]:
+    """从 MySQL 读取该用户的知识库列表（系统库排最前）"""
+    _ensure_system_folder(user_id)
     with get_session() as db:
-        rows = db.query(KbFolder).order_by(KbFolder.is_system.desc(), KbFolder.created_at.asc()).all()
+        rows = db.query(KbFolder).filter(KbFolder.user_id == user_id).order_by(
+            KbFolder.is_system.desc(), KbFolder.created_at.asc()
+        ).all()
         return [_folder_to_dict(f) for f in rows]
 
 
-def list_folders() -> List[dict]:
+def list_folders(user_id: int = DEFAULT_USER_ID) -> List[dict]:
     """知识库列表（含每个库的文件数与向量段数，供前端展示）"""
-    folders = _load_folders()
+    folders = _load_folders(user_id)
     doc_n: dict = {}
     chunk_n: dict = {}
-    for d in _load_docs():
+    for d in _load_docs(user_id):
         fid = d.get("folder_id") or TEMP_FOLDER_ID
         doc_n[fid] = doc_n.get(fid, 0) + 1
         chunk_n[fid] = chunk_n.get(fid, 0) + int(d.get("chunks") or 0)
@@ -530,18 +569,20 @@ def list_folders() -> List[dict]:
     ]
 
 
-def create_folder(name: str) -> dict:
-    """新建知识库（重名校验）"""
+def create_folder(name: str, user_id: int = DEFAULT_USER_ID) -> dict:
+    """新建知识库（同用户下重名校验）"""
     name = (name or "").strip()
     if not name:
         raise ValueError("知识库名称不能为空")
     with get_session() as db:
-        if db.query(KbFolder).filter(KbFolder.name == name).first():
+        if db.query(KbFolder).filter(
+            KbFolder.name == name, KbFolder.user_id == user_id
+        ).first():
             raise ValueError(f"已存在同名知识库：{name}")
         fid = uuid.uuid4().hex
         db.add(KbFolder(
             id=fid,
-            user_id=DEFAULT_USER_ID,
+            user_id=user_id,
             name=name,
             is_system=False,
             is_active=True,
@@ -551,18 +592,20 @@ def create_folder(name: str) -> dict:
             "created_at": datetime.now().isoformat(timespec="seconds")}
 
 
-def rename_folder(folder_id: str, name: str) -> dict:
+def rename_folder(folder_id: str, name: str, user_id: int = DEFAULT_USER_ID) -> dict:
     """重命名知识库（系统“临时文件”库不可重命名）"""
     name = (name or "").strip()
     if not name:
         raise ValueError("知识库名称不能为空")
     with get_session() as db:
         f = db.get(KbFolder, folder_id)
-        if f is None:
+        if f is None or f.user_id != user_id:
             raise ValueError("知识库不存在")
         if f.is_system:
             raise ValueError("系统临时文件库不可重命名")
-        dup = db.query(KbFolder).filter(KbFolder.name == name, KbFolder.id != folder_id).first()
+        dup = db.query(KbFolder).filter(
+            KbFolder.name == name, KbFolder.id != folder_id, KbFolder.user_id == user_id
+        ).first()
         if dup:
             raise ValueError(f"已存在同名知识库：{name}")
         f.name = name
@@ -570,35 +613,42 @@ def rename_folder(folder_id: str, name: str) -> dict:
         return _folder_to_dict(f)
 
 
-def set_folder_active(folder_id: str, active: bool) -> dict:
+def set_folder_active(folder_id: str, active: bool, user_id: int = DEFAULT_USER_ID) -> dict:
     """切换知识库激活状态（勾选=参与检索；状态持久化，重启不丢）"""
     with get_session() as db:
         f = db.get(KbFolder, folder_id)
-        if f is None:
+        if f is None or f.user_id != user_id:
             raise ValueError("知识库不存在")
         f.is_active = bool(active)
         db.commit()
         return _folder_to_dict(f)
 
 
-def delete_folder(folder_id: str) -> int:
+def delete_folder(folder_id: str, user_id: int = DEFAULT_USER_ID) -> int:
     """删除知识库：其下所有文件退回系统“临时文件”库（只改外键 + 向量 metadata，
     数据安全优先，严禁级联删除文件与向量）。返回移动的文件数。"""
     if folder_id == TEMP_FOLDER_ID:
         raise ValueError("系统临时文件库不可删除")
     with get_session() as db:
         f = db.get(KbFolder, folder_id)
-        if f is None:
+        if f is None or f.user_id != user_id:
             raise ValueError("知识库不存在")
-        # 把该库下所有文档外键改回临时文件区
-        moved = db.query(KbDocument).filter(KbDocument.folder_id == folder_id).update(
-            {KbDocument.folder_id: TEMP_FOLDER_ID}
-        )
+        if f.is_system:
+            raise ValueError("系统临时文件库不可删除")
+        # 目标临时文件区（该用户的系统库 id，缺失时兜底常量）
+        sys_folder = db.query(KbFolder).filter(
+            KbFolder.is_system == True, KbFolder.user_id == user_id
+        ).first()
+        temp_id = sys_folder.id if sys_folder else TEMP_FOLDER_ID
+        # 只移动该用户、该库下的文档外键回临时文件区
+        moved = db.query(KbDocument).filter(
+            KbDocument.folder_id == folder_id, KbDocument.user_id == user_id
+        ).update({KbDocument.folder_id: temp_id})
         db.delete(f)
         db.commit()
     # 向量块 metadata 同步改归属
     try:
-        _move_folder_chunks(folder_id, TEMP_FOLDER_ID)
+        _move_folder_chunks(folder_id, temp_id)
     except Exception as e:
         print("kb delete folder metadata update failed:", e, file=sys.stderr)
     return moved

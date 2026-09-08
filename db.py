@@ -16,6 +16,8 @@ from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker,
 )
 
+from password_utils import hash_password
+
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -158,20 +160,30 @@ def get_session():
 
 DEFAULT_USER_ID = 1
 DEFAULT_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # 缺省密码，生产环境务必通过 .env 覆盖
 
 
 def ensure_default_user() -> int:
-    """确保默认用户存在，返回其 id（单用户模式下所有数据归属此用户）"""
+    """确保默认用户存在，返回其 id（单用户模式下所有数据归属此用户）
+
+    首次启动：用 .env 中的 ADMIN_PASSWORD 生成 bcrypt 哈希写入数据库。
+    已存在但 password_hash 仍是占位 "!"（旧版本遗留）：用 bcrypt 哈希覆盖。
+    已存在且 password_hash 是有效 bcrypt 哈希：不覆盖（用户可能已改过密码）。
+    """
     with get_session() as db:
         user = db.query(User).filter(User.username == DEFAULT_USERNAME).first()
         if user is None:
             user = User(
                 username=DEFAULT_USERNAME,
-                password_hash="!",  # 占位，登录功能上线后替换为 bcrypt 哈希
+                password_hash=hash_password(DEFAULT_ADMIN_PASSWORD),
                 display_name="管理员",
                 role="admin",
             )
             db.add(user)
             db.commit()
             db.refresh(user)
+        elif user.password_hash == "!":
+            # 旧版本遗留的占位哈希，升级为真实 bcrypt 哈希
+            user.password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
+            db.commit()
         return user.id

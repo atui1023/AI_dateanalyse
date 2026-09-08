@@ -5,6 +5,9 @@ openai>=1.0.0
 python-dotenv>=1.0.0
 pandas>=2.0.0
 openpyxl>=3.1.0
+# 鉴权（服务端 session cookie + 密码哈希）
+itsdangerous>=2.1
+bcrypt>=4.0
 # RAG 知识库（LangChain 生态）
 langchain>=0.3,<0.4
 langchain-openai>=0.2,<0.4

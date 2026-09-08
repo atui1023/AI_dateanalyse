@@ -395,10 +395,142 @@
     cursor: pointer;
   }
   #sendBtn:disabled { background: #94bfff; cursor: not-allowed; }
+
+  /* —————— 登录 / 注册覆盖层 —————— */
+  #loginView {
+    position: fixed; inset: 0;
+    background: #f5f6f8;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+  }
+  .login-card {
+    background: #fff;
+    border: 1px solid #e5e6eb;
+    border-radius: 16px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+    padding: 28px 32px;
+    width: 360px;
+    max-width: calc(100vw - 40px);
+  }
+  .login-card h2 {
+    font-size: 20px; font-weight: 600; color: #1d2129;
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 4px;
+  }
+  .login-card h2 .lucide { width: 22px; height: 22px; color: #165dff; }
+  .login-card .sub { font-size: 13px; color: #86909c; margin-bottom: 20px; }
+  .login-field { margin-bottom: 14px; }
+  .login-field label { display: block; font-size: 13px; color: #4e5969; margin-bottom: 6px; }
+  .login-field input {
+    width: 100%;
+    border: 1px solid #e5e6eb;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 14px;
+    outline: none;
+    background: #fff;
+    color: #1d2129;
+    font-family: inherit;
+  }
+  .login-field input:focus { border-color: #165dff; box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.12); }
+  .login-btn {
+    width: 100%;
+    background: #165dff; color: #fff;
+    border: none; border-radius: 8px;
+    padding: 10px 0;
+    font-size: 15px; font-weight: 500;
+    cursor: pointer;
+    margin-top: 6px;
+  }
+  .login-btn:hover { background: #0e42d2; }
+  .login-btn:disabled { background: #94bfff; cursor: not-allowed; }
+  .login-link {
+    display: block; text-align: center;
+    font-size: 13px; color: #165dff;
+    margin-top: 14px;
+    cursor: pointer;
+  }
+  .login-link:hover { text-decoration: underline; }
+  .login-err { color: #cb272d; font-size: 12px; margin-top: 8px; min-height: 14px; }
+
+  /* —————— 顶部用户区 —————— */
+  #userArea {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: #4e5969; font-weight: 400;
+  }
+  #userArea .uname { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #userArea > .lucide { width: 16px; height: 16px; color: #86909c; }
+  #logoutBtn {
+    background: none; border: 1px solid #e5e6eb; border-radius: 6px;
+    padding: 4px 10px; cursor: pointer; color: #4e5969;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px;
+  }
+  #logoutBtn:hover { background: #f2f3f5; color: #1d2129; }
+  #logoutBtn .lucide { width: 14px; height: 14px; color: #86909c; }
+
+  /* —————— 主布局：侧边栏 + 聊天区 —————— */
+  #bodyWrap { display: flex; flex: 1; min-height: 0; }
+  #chatArea { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+
+  /* —————— 会话侧边栏 —————— */
+  #sessionSidebar {
+    width: 240px; flex-shrink: 0;
+    background: #fff;
+    border-right: 1px solid #e5e6eb;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-head { padding: 12px; border-bottom: 1px solid #f2f3f5; }
+  #newSessionBtn {
+    width: 100%;
+    background: #165dff; color: #fff;
+    border: none; border-radius: 8px;
+    padding: 8px 0; font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  #newSessionBtn:hover { background: #0e42d2; }
+  #newSessionBtn .lucide { width: 15px; height: 15px; }
+  #sessionList { flex: 1; overflow-y: auto; padding: 6px 8px; }
+  .session-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 2px;
+    position: relative;
+  }
+  .session-item:hover { background: #f7f8fa; }
+  .session-item.active { background: #e8f3ff; }
+  .session-item.active .stitle { color: #165dff; }
+  .session-main { flex: 1; min-width: 0; }
+  .session-item .stitle {
+    font-size: 13px; color: #1d2129; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-item .smeta { font-size: 11px; color: #86909c; margin-top: 2px; }
+  .session-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.15s ease; flex-shrink: 0; }
+  .session-item:hover .session-actions { opacity: 1; }
+  .session-empty { font-size: 12px; color: #86909c; padding: 14px 10px; text-align: center; }
 </style>
 </head>
 <body>
-<header><i data-lucide="sparkles"></i>智能数据分析助手<span>表格数据分析 · 知识库问答</span></header>
+<header><i data-lucide="sparkles"></i>智能数据分析助手<span>表格数据分析 · 知识库问答</span>
+  <div id="userArea" style="display:none">
+    <i data-lucide="user"></i><span class="uname" id="userName">-</span>
+    <button id="logoutBtn" type="button" title="登出"><i data-lucide="log-out"></i>登出</button>
+  </div>
+</header>
+<div id="bodyWrap">
+  <aside id="sessionSidebar">
+    <div class="sidebar-head">
+      <button id="newSessionBtn" type="button"><i data-lucide="plus"></i>新建会话</button>
+    </div>
+    <div id="sessionList"></div>
+  </aside>
+  <div id="chatArea">
 <div id="chat">
   <div class="tip" id="tipText">点击左下角上传按钮，可上传 CSV / Excel 数据文件（最多挂载 10 个）或 TXT / MD / PDF 知识文档
 所有文件上传后进入「临时文件」并自动解析、向量化，解析完成即可被检索
@@ -428,6 +560,30 @@
     <button id="sendBtn" type="submit">发送</button>
   </form>
 </div>
+  </div><!-- /#chatArea -->
+</div><!-- /#bodyWrap -->
+
+<div id="loginView" style="display:none">
+  <div class="login-card">
+    <h2><i data-lucide="sparkles"></i><span id="loginTitle">登录</span></h2>
+    <div class="sub" id="loginSub">使用账号登录以开始对话</div>
+    <div class="login-field" id="regNameField" style="display:none">
+      <label>显示名称（可选）</label>
+      <input id="regName" type="text" autocomplete="name" placeholder="便于展示，可留空">
+    </div>
+    <div class="login-field">
+      <label>用户名</label>
+      <input id="loginUser" type="text" autocomplete="username" placeholder="输入用户名">
+    </div>
+    <div class="login-field">
+      <label>密码</label>
+      <input id="loginPass" type="password" autocomplete="current-password" placeholder="输入密码">
+    </div>
+    <div class="login-err" id="loginErr"></div>
+    <button class="login-btn" id="loginSubmit" type="button">登录</button>
+    <span class="login-link" id="loginToggle">没有账号？去注册</span>
+  </div>
+</div>
 
 <div id="toastBox"></div>
 
@@ -456,7 +612,7 @@ const folderBtn = document.getElementById("folderBtn");
 const filePopover = document.getElementById("filePopover");
 const fileCountBadge = document.getElementById("fileCount");
 const modeBar = document.getElementById("modeBar");
-const tipText = document.getElementById("tipText");
+let tipText = document.getElementById("tipText");
 
 function refreshIcons() { window.lucide && lucide.createIcons(); }
 
@@ -472,6 +628,26 @@ let kbDocs = [];              // 全部文档：[{doc_id, filename, ext, folder_
 let kbFolders = [];           // 知识库列表：[{id, name, active, system, docs, chunks}, ...]
 const expandedFolders = new Set(["default"]);  // 展开的知识库（默认展开“临时文件”）
 let pollTimer = null;
+// 会话与登录态
+let currentSessionId = null;  // 当前会话 id（首次对话时由后端分配）
+let currentUser = null;        // {id, username, display_name, role}
+let sessions = [];             // 会话列表：[{session_id, title, mode, updated_at, message_count}]
+let isRegister = false;        // 当前登录卡片是否处于注册模式
+
+// 统一 fetch 包装：业务接口收到 401 时清空状态并跳回登录页
+// /auth/login 与 /auth/register 不走此函数（它们本身的 401 是正常错误提示）
+async function apiFetch(url, options) {
+  const resp = await fetch(url, options);  // 实际发起请求（不再嵌套 apiFetch 自身）
+  if (resp.status === 401) {
+    currentSessionId = null;
+    currentUser = null;
+    messages.length = 0;
+    sessions = [];
+    showLoginView();
+    throw new Error("未登录或登录已失效");
+  }
+  return resp;
+}
 const failedNotified = new Set();
 
 const TAB_EXT = [".csv", ".xlsx", ".xls"];
@@ -722,7 +898,7 @@ async function addFolder() {
   const name = input.value.trim();
   if (!name) { input.focus(); return; }
   try {
-    const r = await fetch("/kb/folders", {
+    const r = await apiFetch("/kb/folders", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
@@ -748,7 +924,7 @@ async function deleteFolder(fid, name, docCount) {
     if (!ok) return;
   }
   try {
-    const r = await fetch("/kb/folders/" + encodeURIComponent(fid), { method: "DELETE" });
+    const r = await apiFetch("/kb/folders/" + encodeURIComponent(fid), { method: "DELETE" });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       toast(err.detail || "删除失败", "err");
@@ -761,7 +937,7 @@ async function deleteFolder(fid, name, docCount) {
 
 async function patchFolder(fid, payload) {
   try {
-    const r = await fetch("/kb/folders/" + encodeURIComponent(fid), {
+    const r = await apiFetch("/kb/folders/" + encodeURIComponent(fid), {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
@@ -775,7 +951,7 @@ async function patchFolder(fid, payload) {
 
 async function mountDoc(id) {
   try {
-    const r = await fetch(`/kb/documents/${encodeURIComponent(id)}/mount`, { method: "POST" });
+    const r = await apiFetch(`/kb/documents/${encodeURIComponent(id)}/mount`, { method: "POST" });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "挂载失败");
     datasets.push({ dataset_id: data.dataset_id, filename: data.filename, summary: data.summary });
@@ -785,7 +961,7 @@ async function mountDoc(id) {
 }
 
 async function unmountDataset(id) {
-  try { await fetch("/datasets/" + encodeURIComponent(id), { method: "DELETE" }); } catch (e) {}
+  try { await apiFetch("/datasets/" + encodeURIComponent(id), { method: "DELETE" }); } catch (e) {}
   datasets = datasets.filter(d => d.dataset_id !== id);
   renderFilePopover();
   toast("已取消挂载");
@@ -794,7 +970,7 @@ async function unmountDataset(id) {
 async function deleteDoc(id, name) {
   if (!confirm(`确认删除文件「${name}」？\n将同步清理其向量数据，删除后不可恢复。`)) return;
   try {
-    const r = await fetch("/kb/documents/" + encodeURIComponent(id), { method: "DELETE" });
+    const r = await apiFetch("/kb/documents/" + encodeURIComponent(id), { method: "DELETE" });
     if (!r.ok) throw new Error("删除失败");
     datasets = datasets.filter(d => d.dataset_id !== id);
     toast("文件已删除", "ok");
@@ -804,7 +980,7 @@ async function deleteDoc(id, name) {
 
 async function moveDoc(id, folderId, folderName) {
   try {
-    const r = await fetch(`/kb/documents/${encodeURIComponent(id)}/folder`, {
+    const r = await apiFetch(`/kb/documents/${encodeURIComponent(id)}/folder`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ folder_id: folderId }),
     });
@@ -816,7 +992,7 @@ async function moveDoc(id, folderId, folderName) {
 
 async function retryDoc(id) {
   try {
-    const r = await fetch(`/kb/documents/${encodeURIComponent(id)}/retry`, { method: "POST" });
+    const r = await apiFetch(`/kb/documents/${encodeURIComponent(id)}/retry`, { method: "POST" });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       toast(err.detail || "重试失败", "err");
@@ -832,14 +1008,14 @@ async function retryDoc(id) {
 
 async function loadFolders() {
   try {
-    const r = await fetch("/kb/folders");
+    const r = await apiFetch("/kb/folders");
     if (r.ok) kbFolders = await r.json();
   } catch (e) { /* 下次轮询再试 */ }
 }
 
 async function loadDocs() {
   try {
-    const r = await fetch("/kb/documents");
+    const r = await apiFetch("/kb/documents");
     if (r.ok) kbDocs = await r.json();
   } catch (e) { /* 下次轮询再试 */ }
 }
@@ -851,7 +1027,7 @@ async function refreshKbData() {
 
 async function patchDocActive(did, active) {
   try {
-    const r = await fetch(`/kb/documents/${encodeURIComponent(did)}/active`, {
+    const r = await apiFetch(`/kb/documents/${encodeURIComponent(did)}/active`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active }),
     });
@@ -884,8 +1060,8 @@ function schedulePoll() {
   }, 2000);
 }
 
-// 页面打开即拉取知识库状态（重启 / 刷新后立即恢复）
-refreshKbData().then(() => { if (kbDocs.some(d => d.status === "parsing")) schedulePoll(); });
+// 页面打开时先检查登录态：已登录则加载主界面数据，未登录则显示登录页
+checkAuth();
 
 // ==================== 模式切换 ====================
 
@@ -893,7 +1069,8 @@ function setMode(m) {
   if (mode === m) return;
   mode = m;
   modeBar.querySelectorAll(".mode-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === m));
-  tipText.textContent = MODE_TIPS[m];
+  const tip = document.getElementById("tipText");
+  if (tip) tip.textContent = MODE_TIPS[m];
   inputEl.placeholder = m === "rag"
     ? "就文档内容提问，例如：制度里对住宿是怎么规定的"
     : "输入你的问题，Enter 发送，Shift+Enter 换行";
@@ -1002,7 +1179,7 @@ fileInput.onchange = async () => {
       try {
         const fd = new FormData();
         fd.append("file", f);
-        const r = await fetch("/upload", { method: "POST", body: fd });
+        const r = await apiFetch("/upload", { method: "POST", body: fd });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || "上传失败");
         success++;
@@ -1021,7 +1198,7 @@ fileInput.onchange = async () => {
       try {
         const fd = new FormData();
         fd.append("file", f);
-        const r = await fetch("/kb/upload", { method: "POST", body: fd });
+        const r = await apiFetch("/kb/upload", { method: "POST", body: fd });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || "上传失败");
         success++;
@@ -1067,13 +1244,14 @@ async function send(text) {
   bubble.classList.add("cursor");
 
   try {
-    const resp = await fetch("/chat", {
+    const resp = await apiFetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages,
         dataset_ids: mode === "analysis" ? datasets.map(d => d.dataset_id) : [],
         mode,
+        session_id: currentSessionId,  // 首次为 null，后端会新建并通过 type=session 事件返回
       }),
     });
 
@@ -1102,6 +1280,9 @@ async function send(text) {
         if (payload.type === "content") {
           reply += payload.content;
           bubble.textContent = reply;
+        } else if (payload.type === "session") {
+          // 首次对话时后端分配 session_id，保存下来供后续对话续接
+          if (payload.session_id) currentSessionId = payload.session_id;
         } else if (payload.type === "result") {
           resultHtml = '<div class="result">';
           if (payload.stdout && payload.stdout.trim()) {
@@ -1133,6 +1314,9 @@ async function send(text) {
         chatEl.scrollTop = chatEl.scrollHeight;
       }
     }
+
+    // 收到 [DONE] 流结束后刷新会话列表（标题 / 消息数 / 时间会更新）
+    loadSessions();
 
     bubble.classList.remove("cursor");
     bubble.innerHTML = formatMessage(reply) + resultHtml + sourcesHtml;
@@ -1172,6 +1356,270 @@ inputEl.addEventListener("keydown", (e) => {
 inputEl.addEventListener("input", () => {
   inputEl.style.height = "auto";
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+});
+
+// ==================== 登录 / 注册 / 登出 ====================
+
+function showLoginView() {
+  document.getElementById("loginView").style.display = "flex";
+  document.getElementById("userArea").style.display = "none";
+  // 清空聊天区与会话列表，避免残留上一个用户的数据
+  chatEl.innerHTML = "";
+  document.getElementById("sessionList").innerHTML = "";
+  currentSessionId = null;
+  refreshIcons();
+  const userEl = document.getElementById("loginUser");
+  if (userEl) userEl.focus();
+}
+
+function showMainView() {
+  document.getElementById("loginView").style.display = "none";
+  document.getElementById("userArea").style.display = "flex";
+  if (currentUser) {
+    document.getElementById("userName").textContent = currentUser.display_name || currentUser.username;
+  }
+  // 恢复聊天区初始提示
+  chatEl.innerHTML = `<div class="tip" id="tipText">${MODE_TIPS[mode]}</div>`;
+  tipText = document.getElementById("tipText");
+  // 登录成功后拉取知识库状态与会话列表
+  refreshKbData().then(() => { if (kbDocs.some(d => d.status === "parsing")) schedulePoll(); });
+  loadSessions();
+  refreshIcons();
+}
+
+// 启动时调用：检查当前登录态（cookie 由浏览器自动带上）
+async function checkAuth() {
+  try {
+    const r = await fetch("/auth/me");
+    if (r.ok) {
+      currentUser = await r.json();
+      showMainView();
+    } else {
+      showLoginView();
+    }
+  } catch (e) {
+    showLoginView();
+  }
+}
+
+// 切换登录 / 注册表单
+function setRegisterMode(reg) {
+  isRegister = reg;
+  document.getElementById("regNameField").style.display = reg ? "block" : "none";
+  document.getElementById("loginTitle").textContent = reg ? "注册" : "登录";
+  document.getElementById("loginSub").textContent = reg ? "创建账号后自动登录" : "使用账号登录以开始对话";
+  document.getElementById("loginSubmit").textContent = reg ? "注册" : "登录";
+  document.getElementById("loginToggle").textContent = reg ? "已有账号？去登录" : "没有账号？去注册";
+  document.getElementById("loginPass").autocomplete = reg ? "new-password" : "current-password";
+  document.getElementById("loginErr").textContent = "";
+}
+
+// 登录 / 注册提交（不走 apiFetch，自身 401 视为正常错误提示）
+async function submitAuth() {
+  const username = document.getElementById("loginUser").value.trim();
+  const password = document.getElementById("loginPass").value;
+  const displayName = document.getElementById("regName").value.trim();
+  if (!username || !password) {
+    document.getElementById("loginErr").textContent = "请输入用户名和密码";
+    return;
+  }
+  const btn = document.getElementById("loginSubmit");
+  btn.disabled = true;
+  try {
+    const url = isRegister ? "/auth/register" : "/auth/login";
+    const payload = isRegister
+      ? { username, password, display_name: displayName || undefined }
+      : { username, password };
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || (isRegister ? "注册失败" : "用户名或密码错误"));
+    currentUser = data;
+    // 清空表单
+    document.getElementById("loginUser").value = "";
+    document.getElementById("loginPass").value = "";
+    document.getElementById("regName").value = "";
+    if (isRegister) setRegisterMode(false);
+    showMainView();
+  } catch (e) {
+    document.getElementById("loginErr").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function doLogout() {
+  try { await fetch("/auth/logout", { method: "POST" }); } catch (e) {}
+  currentUser = null;
+  currentSessionId = null;
+  messages.length = 0;
+  sessions = [];
+  datasets = [];
+  showLoginView();
+  toast("已登出");
+}
+
+document.getElementById("loginSubmit").onclick = submitAuth;
+document.getElementById("loginToggle").onclick = () => setRegisterMode(!isRegister);
+document.getElementById("logoutBtn").onclick = doLogout;
+// 登录表单内回车提交
+["loginUser", "loginPass", "regName"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitAuth(); }
+  });
+});
+
+// ==================== 会话侧边栏 ====================
+
+// 相对时间格式化：刚刚 / 5分钟前 / 3小时前 / 2天前 / 日期
+function relativeTime(ts) {
+  if (!ts) return "";
+  const t = new Date(ts).getTime();
+  if (!t) return "";
+  const diff = Math.max(0, Date.now() - t);
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return "刚刚";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + " 分钟前";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + " 小时前";
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + " 天前";
+  return new Date(ts).toLocaleDateString("zh-CN");
+}
+
+function renderSessions() {
+  const list = document.getElementById("sessionList");
+  if (!sessions.length) {
+    list.innerHTML = '<div class="session-empty">暂无会话，点击「新建会话」开始</div>';
+    refreshIcons();
+    return;
+  }
+  // 按 updated_at 倒序
+  sessions.sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+  list.innerHTML = sessions.map(s => `
+    <div class="session-item ${s.session_id === currentSessionId ? "active" : ""}" data-sid="${escapeHtml(s.session_id)}">
+      <div class="session-main">
+        <div class="stitle" title="${escapeHtml(s.title || "新会话")}">${escapeHtml(s.title || "新会话")}</div>
+        <div class="smeta">${relativeTime(s.updated_at)} · ${s.message_count || 0} 条</div>
+      </div>
+      <span class="session-actions">
+        <button class="icon-btn" data-act="rename-sess" data-sid="${escapeHtml(s.session_id)}" title="重命名" type="button"><i data-lucide="edit-3"></i></button>
+        <button class="icon-btn danger" data-act="del-sess" data-sid="${escapeHtml(s.session_id)}" data-title="${escapeHtml(s.title || "新会话")}" title="删除" type="button"><i data-lucide="trash-2"></i></button>
+      </span>
+    </div>`).join("");
+  refreshIcons();
+}
+
+async function loadSessions() {
+  try {
+    const r = await apiFetch("/sessions");
+    if (r.ok) {
+      sessions = await r.json();
+      renderSessions();
+    }
+  } catch (e) { /* 401 已由 apiFetch 处理 */ }
+}
+
+// 新建会话：清空当前对话，不立即请求后端（首次对话时由后端自动创建并返回 session_id）
+function newSession() {
+  currentSessionId = null;
+  messages.length = 0;
+  chatEl.innerHTML = `<div class="tip" id="tipText">${MODE_TIPS[mode]}</div>`;
+  tipText = document.getElementById("tipText");
+  renderSessions();
+  inputEl.focus();
+}
+
+// 打开已有会话：拉取历史消息并渲染
+async function openSession(sid) {
+  try {
+    const r = await apiFetch("/sessions/" + encodeURIComponent(sid) + "/messages");
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "加载会话失败", "err");
+      return;
+    }
+    const data = await r.json();
+    currentSessionId = sid;
+    messages.length = 0;
+    chatEl.innerHTML = "";
+    for (const m of (data.messages || [])) {
+      const b = addBubble(m.role);
+      if (m.role === "assistant") b.innerHTML = formatMessage(m.content);
+      else b.textContent = m.content;
+      messages.push({ role: m.role, content: m.content });
+    }
+    // 没有历史消息时显示模式提示
+    if (!chatEl.children.length) {
+      chatEl.innerHTML = `<div class="tip" id="tipText">${MODE_TIPS[mode]}</div>`;
+      tipText = document.getElementById("tipText");
+    }
+    renderSessions();
+    chatEl.scrollTop = chatEl.scrollHeight;
+    refreshIcons();
+  } catch (e) { /* 401 已由 apiFetch 处理 */ }
+}
+
+async function deleteSession(sid, title) {
+  if (!confirm(`确认删除会话「${title}」？\n该会话的历史消息将被清除。`)) return;
+  try {
+    const r = await apiFetch("/sessions/" + encodeURIComponent(sid), { method: "DELETE" });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "删除失败", "err");
+      return;
+    }
+    sessions = sessions.filter(s => s.session_id !== sid);
+    if (currentSessionId === sid) {
+      currentSessionId = null;
+      messages.length = 0;
+      chatEl.innerHTML = `<div class="tip" id="tipText">${MODE_TIPS[mode]}</div>`;
+      tipText = document.getElementById("tipText");
+    }
+    renderSessions();
+    toast("会话已删除", "ok");
+  } catch (e) { /* 401 已由 apiFetch 处理 */ }
+}
+
+async function renameSession(sid) {
+  const s = sessions.find(x => x.session_id === sid);
+  const title = prompt("重命名会话：", s ? s.title : "");
+  if (!title || !title.trim()) return;
+  try {
+    const r = await apiFetch("/sessions/" + encodeURIComponent(sid), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title.trim() }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      toast(err.detail || "重命名失败", "err");
+      return;
+    }
+    const data = await r.json();
+    const idx = sessions.findIndex(x => x.session_id === sid);
+    if (idx >= 0) sessions[idx].title = data.title;
+    renderSessions();
+  } catch (e) { /* 401 已由 apiFetch 处理 */ }
+}
+
+document.getElementById("newSessionBtn").onclick = newSession;
+// 会话列表事件委托：点击切换 / 重命名 / 删除
+document.getElementById("sessionList").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  const item = e.target.closest(".session-item");
+  if (btn) {
+    const act = btn.dataset.act;
+    const sid = btn.dataset.sid;
+    if (act === "rename-sess") { renameSession(sid); return; }
+    if (act === "del-sess") { deleteSession(sid, btn.dataset.title); return; }
+  }
+  if (item) openSession(item.dataset.sid);
 });
 </script>
 </body>

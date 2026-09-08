@@ -18,10 +18,11 @@ from sqlalchemy.orm import (
 
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "mysql+pymysql://aidata:aidata%402026@127.0.0.1:3306/aidataanalysis?charset=utf8mb4",
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "未读取到 DATABASE_URL，请检查项目目录下的 .env 文件（参考 .env.example）"
+    )
 
 engine = create_engine(
     DATABASE_URL,

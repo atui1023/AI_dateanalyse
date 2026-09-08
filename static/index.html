@@ -310,6 +310,26 @@
   }
   .role-badge.admin { background: #fff3e8; color: #ff7d00; }
   .role-badge.user { background: #e8f7ff; color: #165dff; }
+  /* 管理模态框尺寸：加宽 + 加高，展示更多数据 */
+  .modal-box.admin-box { width: 880px; }
+  .modal-body.admin-body {
+    max-height: 82vh; overflow-y: auto;
+    padding: 14px 18px 18px;
+  }
+  /* 输入框/下拉统一外观，避免系统默认灰黑边 */
+  .admin-create input, .admin-create select {
+    background: #fff; height: 32px; outline: none;
+    transition: border-color 0.15s ease;
+  }
+  .admin-create input:focus, .admin-create select:focus { border-color: #165dff; }
+  .admin-create button { height: 32px; font-size: 13px; }
+  /* 表格行紧凑一点，同屏可见更多行；表头吸顶 */
+  .admin-table th, .admin-table td { padding: 7px 10px; }
+  .admin-table thead th {
+    position: sticky; top: 0; z-index: 1;
+  }
+  .admin-log-toolbar button:hover { background: #e8f3ff; color: #165dff; border-color: #bedaff; }
+  .admin-log-toolbar .lucide { width: 13px; height: 13px; }
   .move-folder-item {
     display: flex; align-items: center; gap: 8px;
     padding: 10px 12px; cursor: pointer;
@@ -521,14 +541,15 @@
   }
   #userArea .uname { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #userArea > .lucide { width: 16px; height: 16px; color: #86909c; }
-  #logoutBtn {
+  #logoutBtn, #adminBtn {
     background: none; border: 1px solid #e5e6eb; border-radius: 6px;
     padding: 4px 10px; cursor: pointer; color: #4e5969;
     display: inline-flex; align-items: center; gap: 5px;
-    font-size: 12px;
+    font-size: 12px; line-height: 1.4;
   }
-  #logoutBtn:hover { background: #f2f3f5; color: #1d2129; }
-  #logoutBtn .lucide { width: 14px; height: 14px; color: #86909c; }
+  #adminBtn { margin-right: 6px; }
+  #logoutBtn:hover, #adminBtn:hover { background: #f2f3f5; color: #1d2129; }
+  #logoutBtn .lucide, #adminBtn .lucide { width: 14px; height: 14px; color: #86909c; }
 
   /* —————— 主布局：侧边栏 + 聊天区 —————— */
   #bodyWrap { display: flex; flex: 1; min-height: 0; }
@@ -664,12 +685,12 @@
 
 <!-- 管理模态框：用户列表 + 创建表单 + 审计日志 -->
 <div id="adminModal" class="modal-mask">
-  <div class="modal-box" style="max-width: 760px;">
+  <div class="modal-box admin-box">
     <div class="modal-head">
       <span class="modal-title"><i data-lucide="settings"></i>用户与日志管理</span>
       <button class="icon-btn" id="adminModalClose" type="button" title="关闭"><i data-lucide="x"></i></button>
     </div>
-    <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+    <div class="modal-body admin-body">
       <div class="admin-tabs">
         <button class="admin-tab active" data-tab="users">用户管理</button>
         <button class="admin-tab" data-tab="logs">审计日志</button>

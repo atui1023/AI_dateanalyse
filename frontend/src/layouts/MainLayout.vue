@@ -7,6 +7,7 @@ const auth = useAuthStore()
 
 async function handleLogout() {
   await auth.logout()
+  // 无论后端 logout 是否成功，都强制跳登录页
   router.push('/login')
 }
 </script>

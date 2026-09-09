@@ -1,4 +1,5 @@
 // 聊天接口：SSE 流式 + 普通分析
+import { ElMessage } from 'element-plus'
 import request from './request'
 
 export interface ChatPayload {
@@ -34,6 +35,15 @@ export async function streamChat(
   })
 
   if (!resp.ok) {
+    if (resp.status === 401) {
+      // session 失效：清状态并跳登录页（fetch 不走 axios 拦截器，需手动处理）
+      localStorage.removeItem('user')
+      if (location.pathname !== '/login') {
+        ElMessage.error('登录已失效，请重新登录')
+        location.href = '/login'
+      }
+      throw new Error('登录已失效')
+    }
     const detail = await resp.text().catch(() => '请求失败')
     throw new Error(detail || `HTTP ${resp.status}`)
   }

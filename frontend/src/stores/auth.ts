@@ -37,6 +37,8 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout() {
     try {
       await authApi.logout()
+    } catch {
+      // session 已失效时后端返回 401，忽略错误，前端照样清状态
     } finally {
       user.value = null
       localStorage.removeItem('user')

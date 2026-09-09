@@ -17,7 +17,10 @@ export async function streamChat(
   onChunk: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const resp = await fetch('/chat', {
+  // 直连后端，绕过 Vite dev proxy（proxy 会缓冲 SSE 流式响应导致前端拿不到实时数据）
+  const isDev = import.meta.env.DEV
+  const baseUrl = isDev ? 'http://127.0.0.1:8000' : ''
+  const resp = await fetch(`${baseUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',

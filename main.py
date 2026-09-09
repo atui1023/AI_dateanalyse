@@ -11,6 +11,7 @@ import pandas as pd
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -25,16 +26,32 @@ from db import (
 
 app = FastAPI(title="AI 数据分析")
 
+# CORS：开发期 Vue dev server (5173) 直连后端 (8000) 走 fetch，需要跨域
+# 生产环境构建产物由 FastAPI 托管，同源，不触发 CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # SessionMiddleware：cookie 签名存储 user_id，30 天有效期
 # secret_key 从 .env 读取，缺失时用固定串（开发环境兜底，生产必须配置）
+# 开发期前端 5173 → 后端 8000 跨域，需 same_site=None 让浏览器接受跨域 cookie
+# 生产环境同源，same_site=None 也无害
 _SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-only-insecure-secret-please-change")
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SESSION_SECRET,
     session_cookie="session",
     max_age=30 * 24 * 3600,  # 30 天
-    same_site="lax",
-    https_only=False,
+    same_site="none",
+    https_only=False,  # 开发期 http，生产期反向代理终止 https 时也是 http
+    path="/",
 )
 
 # 注册鉴权路由（/auth/login / /auth/register / /auth/logout / /auth/me）

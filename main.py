@@ -467,13 +467,13 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"知识库检索失败：{e}")
         system_content = llm.build_rag_prompt(context_text)
-    elif active:
-        summary_text = "\n\n".join(dataset_summary_text(i + 1, ds) for i, ds in enumerate(active))
-        # 数据分析时自动参考永久知识库中的业务规则（Top-3）；库为空或检索失败都不影响分析
+    elif req.mode == "analysis":
+        # 数据分析模式：挂载数据集 + 知识库业务规则 双路并行
+        summary_text = "\n\n".join(dataset_summary_text(i + 1, ds) for i, ds in enumerate(active)) if active else ""
+        # 分析时也参考永久知识库中的业务规则（Top-3）；库为空或检索失败都不影响分析
         kb_context = ""
         try:
             if question and kb.doc_count(user_id=user.id) > 0:
-                # 分析时也只参考激活知识库和激活文件内的业务规则
                 docs = kb.retrieve(question, k=3,
                                    folder_ids=kb.active_folder_ids(user_id=user.id),
                                    doc_ids=kb.active_doc_ids(user_id=user.id),

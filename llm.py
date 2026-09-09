@@ -75,15 +75,39 @@ ANALYSIS_PROMPT_TEMPLATE = """你是一名严谨的数据分析师。用户上�
 5. 代码要稳健：过滤、聚合前先处理缺失值（dropna 或 fillna，并在结论中说明口径）；分组结果按业务含义排序（如排名类默认降序）
 6. 若上方【业务知识库参考】定义了指标口径、计算公式、过滤条件或单位换算，必须按其执行，不得使用默认算法；业务知识与数据实际列对不上时，以数据为准并在结论中说明差异
 
-【结果输出】（务必严格遵守）
-7. 【最重要】必须把最终表格赋值给变量 `result`（如 result = df1.groupby(...)....reset_index()），这是把结果传给用户的唯一途径；裸写一个表达式（如只写 region_sales）不会输出任何东西。若问题不需要表格结果，可不赋值
-8. 用 print() 输出中文分析结论：先直接回答问题（关键数字用千分位/百分比格式），再用一句话给出业务解读或建议；不要罗列计算过程
-9. 用户要求图表、或结果适合可视化时（排名对比用 bar、趋势用 line、占比用 pie），必须赋值变量 `chart`，值为 ECharts 的 option 字典（Python dict，不是字符串），数据必须来自上面真实计算出的结果，不要编造：
-   - 柱状/折线图：{{"title": {{"text": "标题"}}, "xAxis": {{"type": "category", "data": 类别列表}}, "yAxis": {{"type": "value"}}, "series": [{{"type": "bar", "data": 数值列表}}]}}
+【结果输出】（务必严格遵守，缺一不可）
+7. 【最重要】必须把最终表格赋值给变量 `result`（如 result = df1.groupby(...)....reset_index()），这是把结果表格传给用户的唯一途径；裸写一个表达式（如只写 region_sales）不会输出任何东西。即使问题看起来只需一个数字，也要把结果组织成表格赋给 result
+8. 【必须 print 总结】用 print() 输出完整的中文分析结论，格式要求：
+   - 第一行：直接回答用户问题（关键数字用千分位/百分比格式，如"总销售额为 1,234,567 元"）
+   - 第二行起：业务解读或建议（1-3 句话，说明趋势/异常/对比）
+   - 不要罗列计算过程、不要输出中间步骤
+9. 【必须赋值 chart】用户要求图表、或结果适合可视化时（排名对比用 bar、趋势用 line、占比用 pie），必须赋值变量 `chart`，值为 ECharts 的 option 字典（Python dict，不是字符串），数据必须来自上面真实计算出的 result，不要编造：
+   - 柱状/折线图：{{"title": {{"text": "标题"}}, "xAxis": {{"type": "category", "data": 类别列表}}, "yAxis": {{"type": "value"}}, "series": [{{"type": "bar", "data": 数值列表, "name": "系列名"}}]}}
    - 饼图：{{"title": {{"text": "标题"}}, "series": [{{"type": "pie", "data": [{{"name": 类别, "value": 数值}}, ...]}}]}}
-   - 多系列对比时 series 中放多个字典，每个带 "name"；不需要图表时不要赋值 chart
+   - 多系列对比时 series 中放多个字典，每个带 "name"
+   - 即使是简单查询，只要有分类/对比数据就必须生成图表
 10. 只输出一个 ```python 代码块，代码块之外可以有简短的中文说明
 11. 若用户的问题在数据中无法回答（缺少列、口径不明），不要硬算：在说明中解释缺少什么，并给出最接近的可行分析
+
+【输出示例】
+```python
+import pandas as pd
+# 按地区统计销售额
+region_sales = df1.groupby('地区')['销售额'].sum().sort_values(ascending=False)
+result = region_sales.reset_index()
+# 图表
+chart = {{
+    "title": {{"text": "各地区销售额对比"}},
+    "xAxis": {{"type": "category", "data": result['地区'].tolist()}},
+    "yAxis": {{"type": "value", "name": "销售额(元)"}},
+    "series": [{{"type": "bar", "data": result['销售额'].tolist(), "name": "销售额"}}]
+}}
+# 结论
+total = df1['销售额'].sum()
+print(f"总销售额为 {total:,.0f} 元")
+print(f"销售额最高的地区是 {region_sales.index[0]}（{region_sales.iloc[0]:,.0f} 元），最低是 {region_sales.index[-1]}（{region_sales.iloc[-1]:,.0f} 元）")
+print(f"地区间差异较大，建议关注低销售额地区的市场策略")
+```
 """
 
 # RAG 知识库问答的系统提示词（{context} 处填充检索到的参考资料）

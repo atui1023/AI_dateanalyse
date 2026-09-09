@@ -10,7 +10,7 @@ import {
 const emit = defineEmits<{ close: [] }>()
 const kb = useKbStore()
 
-const selectedFolderId = ref<string>('')
+const uploadTarget = ref<string>('')  // 上传目标文件夹
 const expandedFolders = ref<Set<string>>(new Set())
 const uploading = ref(false)
 const moveTargetDoc = ref<string | null>(null)
@@ -154,18 +154,35 @@ async function handleRefresh() {
       <el-button size="small" @click="handleCreateFolder">
         <el-icon><FolderPlus /></el-icon> 新建知识库
       </el-button>
+      <el-select
+        v-model="uploadTarget"
+        placeholder="选择上传目标"
+        size="small"
+        style="width: 160px"
+      >
+        <el-option
+          v-for="f in kb.folders"
+          :key="f.id"
+          :label="f.name + (f.system ? '（系统）' : '')"
+          :value="f.id"
+        />
+      </el-select>
       <el-upload
         :show-file-list="false"
-        :before-upload="(f: File) => { handleUpload(f, selectedFolderId); return false }"
-        :disabled="!selectedFolderId"
+        :before-upload="(f: File) => { handleUpload(f, uploadTarget); return false }"
+        :disabled="!uploadTarget || uploading"
+        multiple
       >
-        <el-button size="small" :disabled="!selectedFolderId">
+        <el-button size="small" type="primary" :disabled="!uploadTarget" :loading="uploading">
           <el-icon><Upload /></el-icon> 上传文档
         </el-button>
       </el-upload>
       <el-button size="small" @click="handleRefresh">
         <el-icon><RefreshCw /></el-icon>
       </el-button>
+    </div>
+    <div v-if="!uploadTarget" class="upload-hint">
+      请先选择上传目标文件夹
     </div>
 
     <!-- 文件夹 + 文档列表 -->
@@ -282,7 +299,17 @@ async function handleRefresh() {
 .kb-toolbar {
   display: flex;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.upload-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-radius: 4px;
 }
 .kb-list {
   display: flex;

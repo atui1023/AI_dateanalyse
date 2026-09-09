@@ -3,6 +3,15 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as authApi from '@/api/auth'
 import type { UserInfo } from '@/api/auth'
+import { useKbStore } from './kb'
+import { useSessionsStore } from './sessions'
+
+// 账号态切换时，重置所有与用户绑定的 store 内存态和本地缓存
+// （kb 的挂载列表持久化在全局 localStorage key，不清理会串到新用户）
+export function resetUserScopedState() {
+  useKbStore().reset()
+  useSessionsStore().reset()
+}
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserInfo | null>(null)
@@ -28,6 +37,8 @@ export const useAuthStore = defineStore('auth', () => {
       const { data } = await authApi.login(username, password)
       user.value = data
       localStorage.setItem('user', JSON.stringify(data))
+      // 清掉上一个用户残留的会话/知识库状态，新用户数据由页面重新拉取
+      resetUserScopedState()
       return data
     } finally {
       loading.value = false
@@ -42,6 +53,7 @@ export const useAuthStore = defineStore('auth', () => {
     } finally {
       user.value = null
       localStorage.removeItem('user')
+      resetUserScopedState()
     }
   }
 

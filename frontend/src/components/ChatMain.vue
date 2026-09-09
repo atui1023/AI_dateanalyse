@@ -50,7 +50,14 @@ function syncFromSession() {
 watch(() => sessions.currentId, () => {
   syncFromSession()
 })
+// 流结束后 handleSend 会把消息落库到 sessions.messages，这是组件自身的写入，
+// 不能触发重建（syncFromSession 只映射 role/text，会把流式收到的 result/sources 冲掉）
+let selfPush = false
 watch(() => sessions.messages, () => {
+  if (selfPush) {
+    selfPush = false
+    return
+  }
   syncFromSession()
 }, { deep: true })
 
@@ -75,15 +82,17 @@ async function handleSend() {
   sending.value = true
   scrollToBottom()
 
-  // 助手占位消息
-  const assistantMsg: StreamMessage = {
+  // 助手占位消息；后续更新必须通过 proxy（数组索引）进行，
+  // 直接改闭包里的原始对象不会触发 Vue 响应式更新（result/图表会因此不渲染）
+  streamMessages.value.push({
     role: 'assistant',
     text: '',
     result: null,
     sources: null,
     streaming: true,
-  }
-  streamMessages.value.push(assistantMsg)
+  })
+  const amIdx = streamMessages.value.length - 1
+  const am = () => streamMessages.value[amIdx]
   scrollToBottom()
 
   // 构造 messages payload（含历史）
@@ -101,44 +110,46 @@ async function handleSend() {
   try {
     await streamChat(payload, (chunk: string) => {
       if (!chunk) return
-      let payload: any
+      let evt: any
       try {
-        payload = JSON.parse(chunk)
+        evt = JSON.parse(chunk)
       } catch {
+        console.warn('[chat] 事件解析失败:', String(chunk).slice(0, 100))
         return
       }
-      if (payload.type === 'content') {
-        assistantMsg.text += payload.content
+      if (evt.type === 'content') {
+        am().text += evt.content
         scrollToBottom()
-      } else if (payload.type === 'session') {
-        if (payload.session_id && payload.session_id !== sessions.currentId) {
-          sessions.currentId = payload.session_id
+      } else if (evt.type === 'session') {
+        if (evt.session_id && evt.session_id !== sessions.currentId) {
+          sessions.currentId = evt.session_id
         }
-      } else if (payload.type === 'result') {
-        assistantMsg.result = payload
+      } else if (evt.type === 'result') {
+        am().result = evt
         scrollToBottom()
-      } else if (payload.type === 'sources') {
-        assistantMsg.sources = payload.sources || []
-      } else if (payload.type === 'error') {
-        assistantMsg.text = '出错了：' + payload.error
+      } else if (evt.type === 'sources') {
+        am().sources = evt.sources || []
+      } else if (evt.type === 'error') {
+        am().text = '出错了：' + evt.error
       }
     })
 
-    // 流结束：本地保存消息
-    assistantMsg.streaming = false
+    // 流结束：本地保存消息（标记为自身写入，避免 watch 重建冲掉刚收到的 result）
+    am().streaming = false
+    selfPush = true
     sessions.messages.push(
       { role: 'user', content: text },
-      { role: 'assistant', content: assistantMsg.text },
+      { role: 'assistant', content: am().text },
     )
     // 刷新会话列表（标题/时间会更新）
     sessions.fetchList()
   } catch (e: any) {
-    assistantMsg.streaming = false
+    am().streaming = false
     if (e instanceof AuthError) {
       // session 失效：走全局处理器（清 auth.user + 提示 + SPA 跳登录页）
       notifyUnauthorized()
     } else {
-      assistantMsg.text = '网络错误：' + (e.message || '未知错误')
+      am().text = '网络错误：' + (e.message || '未知错误')
       ElMessage.error('发送失败')
     }
   } finally {

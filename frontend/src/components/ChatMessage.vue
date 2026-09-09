@@ -21,26 +21,35 @@ const props = defineProps<{
   streaming?: boolean
 }>()
 
-const chartRefs = ref<HTMLElement[]>([])
-const chartInstances: echarts.ECharts[] = []
+const chartRef = ref<HTMLElement | null>(null)
+// echarts 实例是重对象，用普通变量保存，避免被 Vue 代理
+let chartInstance: echarts.ECharts | null = null
 
 function renderCharts() {
   const chart = props.result?.chart
   if (!chart) return
   nextTick(() => {
-    const el = chartRefs.value[0]
-    if (el && !chartInstances[0]) {
-      const inst = echarts.init(el)
-      inst.setOption(chart)
-      chartInstances[0] = inst
+    const el = chartRef.value
+    if (!el || chartInstance) return
+    // 防御：模型偶尔生成 bar/line series 但漏掉 xAxis/yAxis，ECharts 会报错且不渲染
+    const series = Array.isArray(chart.series) ? chart.series : [chart.series]
+    const needAxis = series.some((s: any) => s && (s.type === 'bar' || s.type === 'line'))
+    if (needAxis) {
+      if (!chart.xAxis) chart.xAxis = { type: 'category', data: series[0]?.data?.map((_: any, i: number) => i + 1) || [] }
+      if (!chart.yAxis) chart.yAxis = { type: 'value' }
+    }
+    try {
+      chartInstance = echarts.init(el)
+      chartInstance.setOption(chart)
+    } catch (e) {
+      console.warn('[chart] 渲染失败:', e)
     }
   })
 }
 
-function exportChart(idx: number) {
-  const inst = chartInstances[idx]
-  if (!inst) return
-  const url = inst.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' })
+function exportChart() {
+  if (!chartInstance) return
+  const url = chartInstance.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' })
   const a = document.createElement('a')
   a.href = url
   const d = new Date()
@@ -68,11 +77,11 @@ watch(() => props.result, renderCharts, { deep: true })
         <div v-if="result.chart" class="result-section">
           <div class="label chart-label">
             可视化图表
-            <el-button size="small" text @click="exportChart(0)">
+            <el-button size="small" text @click="exportChart">
               <el-icon><Download /></el-icon> 导出 PNG
             </el-button>
           </div>
-          <div ref="chartRefs" class="chart"></div>
+          <div ref="chartRef" class="chart"></div>
         </div>
         <div v-if="result.table" class="result-section">
           <div class="label">结果表格</div>

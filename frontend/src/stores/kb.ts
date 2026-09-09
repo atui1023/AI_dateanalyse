@@ -13,8 +13,52 @@ export interface DatasetMount {
 export const useKbStore = defineStore('kb', () => {
   const folders = ref<Folder[]>([])
   const documents = ref<Document[]>([])
-  const mounts = ref<DatasetMount[]>([]) // 当前挂载为分析用的数据集
+  // 挂载为分析用的数据集；持久化到 localStorage（带所属用户 id），
+  // 同一用户刷新页面后恢复，切换用户时按 uid 校验并清空，避免串到新用户
+  const MOUNTS_KEY = 'kb_mounts'
+  interface MountsPayload { uid: number | null; mounts: DatasetMount[] }
+
+  function loadPayload(): MountsPayload {
+    try {
+      const raw = localStorage.getItem(MOUNTS_KEY)
+      const obj = raw ? JSON.parse(raw) : null
+      if (obj && Array.isArray(obj.mounts)) {
+        return { uid: typeof obj.uid === 'number' ? obj.uid : null, mounts: obj.mounts }
+      }
+    } catch {
+      // 旧格式/损坏数据：忽略
+    }
+    return { uid: null, mounts: [] }
+  }
+
+  const initial = loadPayload()
+  // 当前挂载归属的用户 id；与登录用户不一致时挂载作废
+  const mountOwnerUid = ref<number | null>(initial.uid)
+  const mounts = ref<DatasetMount[]>(initial.mounts)
+
+  function saveMounts() {
+    localStorage.setItem(MOUNTS_KEY, JSON.stringify({ uid: mountOwnerUid.value, mounts: mounts.value }))
+  }
   const loading = ref(false)
+
+  // 绑定当前登录用户：本地缓存的挂载若属于另一个用户（或无主），一律清空
+  // 在用户身份确认/切换时调用，保证不刷新页面换号、或刷新后换号都不残留旧文件
+  function reconcileOwner(uid: number | null) {
+    if (mountOwnerUid.value !== uid) {
+      mounts.value = []
+      mountOwnerUid.value = uid
+      localStorage.removeItem(MOUNTS_KEY)
+    }
+  }
+
+  // 账号切换（登录/登出/会话失效）时调用：清空与当前用户绑定的内存态和本地缓存
+  function reset() {
+    folders.value = []
+    documents.value = []
+    mounts.value = []
+    mountOwnerUid.value = null
+    localStorage.removeItem(MOUNTS_KEY)
+  }
 
   // RAG 检索时勾选的文件夹/文档（active 状态）
   const activeFolderIds = computed(() =>
@@ -53,6 +97,7 @@ export const useKbStore = defineStore('kb', () => {
     folders.value = folders.value.filter((f) => f.id !== id)
     documents.value = documents.value.filter((d) => d.folder_id !== id)
     mounts.value = mounts.value.filter((m) => !documents.value.some((d) => d.doc_id === m.doc_id))
+    saveMounts()
   }
 
   async function toggleFolderActive(id: string, active: boolean) {
@@ -75,12 +120,14 @@ export const useKbStore = defineStore('kb', () => {
         filename: doc?.filename || data.filename,
         summary: data.summary,
       })
+      saveMounts()
     }
   }
 
   async function unmountDocument(docId: string) {
     await kbApi.unmountDocument(docId)
     mounts.value = mounts.value.filter((m) => m.doc_id !== docId)
+    saveMounts()
   }
 
   async function moveDocument(docId: string, folderId: string) {
@@ -93,6 +140,7 @@ export const useKbStore = defineStore('kb', () => {
     await kbApi.deleteDocument(docId)
     documents.value = documents.value.filter((d) => d.doc_id !== docId)
     mounts.value = mounts.value.filter((m) => m.doc_id !== docId)
+    saveMounts()
   }
 
   async function retryDocument(docId: string) {
@@ -110,7 +158,7 @@ export const useKbStore = defineStore('kb', () => {
   return {
     folders, documents, mounts, loading,
     activeFolderIds, activeDocIds, mountIds,
-    fetchFolders, fetchDocuments,
+    fetchFolders, fetchDocuments, reset, reconcileOwner,
     createFolder, renameFolder, deleteFolder, toggleFolderActive,
     toggleDocActive, mountDocument, unmountDocument,
     moveDocument, deleteDocument, retryDocument, uploadFile,

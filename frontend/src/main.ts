@@ -6,7 +6,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
 import App from './App.vue'
 import router from './router'
-import { useAuthStore } from './stores/auth'
+import { useAuthStore, resetUserScopedState } from './stores/auth'
 import { setUnauthorizedHandler } from './api/request'
 import './styles/main.css'
 
@@ -26,6 +26,8 @@ setUnauthorizedHandler(() => {
   const auth = useAuthStore()
   auth.user = null
   localStorage.removeItem('user')
+  // 会话失效：同步清空与用户绑定的知识库/会话缓存，避免重新登录前残留旧数据
+  resetUserScopedState()
   ElMessage.error('登录已失效，请重新登录')
   router.push('/login')
 })

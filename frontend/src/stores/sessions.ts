@@ -66,6 +66,13 @@ export const useSessionsStore = defineStore('sessions', () => {
     messages.value = []
   }
 
+  // 账号切换时清空全部会话态（列表/当前会话/消息），避免残留上一个用户的会话
+  function reset() {
+    list.value = []
+    currentId.value = null
+    messages.value = []
+  }
+
   // 在当前会话追加一条消息（本地乐观更新）
   function pushMessage(msg: ChatMessage) {
     messages.value.push(msg)
@@ -73,6 +80,6 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   return {
     list, currentId, messages, loading, current,
-    fetchList, create, select, rename, remove, clearCurrent, pushMessage,
+    fetchList, create, select, rename, remove, clearCurrent, reset, pushMessage,
   }
 })

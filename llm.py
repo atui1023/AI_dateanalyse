@@ -104,8 +104,8 @@ chart = {{
 }}
 # 结论
 total = df1['销售额'].sum()
-print(f"总销售额为 {total:,.0f} 元")
-print(f"销售额最高的地区是 {region_sales.index[0]}（{region_sales.iloc[0]:,.0f} 元），最低是 {region_sales.index[-1]}（{region_sales.iloc[-1]:,.0f} 元）")
+print(f"总销售额为 {{total:,.0f}} 元")
+print(f"销售额最高的地区是 {{region_sales.index[0]}}（{{region_sales.iloc[0]:,.0f}} 元），最低是 {{region_sales.index[-1]}}（{{region_sales.iloc[-1]:,.0f}} 元）")
 print(f"地区间差异较大，建议关注低销售额地区的市场策略")
 ```
 """

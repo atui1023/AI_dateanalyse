@@ -9,6 +9,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false)
 
   async function fetchMe() {
+    // 静默检查：401 时不弹 toast、不跳转（路由守卫会处理）
     try {
       const { data } = await authApi.me()
       user.value = data

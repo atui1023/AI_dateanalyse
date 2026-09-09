@@ -11,7 +11,7 @@ const logs = ref<AuditLog[]>([])
 const loading = ref(false)
 
 // 创建用户表单
-constcreateForm = ref({
+const createForm = ref({
   username: '',
   password: '',
   display_name: '',

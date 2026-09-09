@@ -39,10 +39,10 @@ onMounted(() => {
 
 // 监听会话切换，重置消息
 function syncFromSession() {
-  streamMessages.value = (sessions.messages || []).map((m) => ({
-    role: m.role as 'user' | 'assistant',
-    text: m.content,
-  }))
+  const msgs = sessions.messages
+  streamMessages.value = Array.isArray(msgs)
+    ? msgs.map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }))
+    : []
   scrollToBottom()
 }
 // 用 watch 更简单，但 onMounted 已处理；切换会话时 sessions.messages 变化
@@ -86,9 +86,10 @@ async function handleSend() {
   scrollToBottom()
 
   // 构造 messages payload（含历史）
+  const historyMsgs = Array.isArray(sessions.messages) ? sessions.messages : []
   const payload = {
     messages: [
-      ...sessions.messages.map((m) => ({ role: m.role, content: m.content })),
+      ...historyMsgs.map((m: any) => ({ role: m.role, content: m.content })),
       { role: 'user' as const, content: text },
     ],
     session_id: sessions.currentId,

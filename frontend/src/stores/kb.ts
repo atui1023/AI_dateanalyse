@@ -1,0 +1,118 @@
+// 知识库 store：文件夹/文档列表 + 挂载数据集
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import * as kbApi from '@/api/kb'
+import type { Folder, Document } from '@/api/kb'
+
+export interface DatasetMount {
+  doc_id: string
+  filename: string
+  summary: string
+}
+
+export const useKbStore = defineStore('kb', () => {
+  const folders = ref<Folder[]>([])
+  const documents = ref<Document[]>([])
+  const mounts = ref<DatasetMount[]>([]) // 当前挂载为分析用的数据集
+  const loading = ref(false)
+
+  // RAG 检索时勾选的文件夹/文档（active 状态）
+  const activeFolderIds = computed(() =>
+    folders.value.filter((f) => f.active && !f.system).map((f) => f.id),
+  )
+  const activeDocIds = computed(() =>
+    documents.value.filter((d) => d.active).map((d) => d.doc_id),
+  )
+  // 分析模式挂载的 dataset_ids
+  const mountIds = computed(() => mounts.value.map((m) => m.doc_id))
+
+  async function fetchFolders() {
+    const { data } = await kbApi.listFolders()
+    folders.value = data
+  }
+
+  async function fetchDocuments(folderId?: string) {
+    const { data } = await kbApi.listDocuments(folderId)
+    documents.value = data
+  }
+
+  async function createFolder(name: string) {
+    const { data } = await kbApi.createFolder(name)
+    folders.value.push(data)
+    return data
+  }
+
+  async function renameFolder(id: string, name: string) {
+    const { data } = await kbApi.renameFolder(id, name)
+    const idx = folders.value.findIndex((f) => f.id === id)
+    if (idx >= 0) folders.value[idx] = data
+  }
+
+  async function deleteFolder(id: string) {
+    await kbApi.deleteFolder(id)
+    folders.value = folders.value.filter((f) => f.id !== id)
+    documents.value = documents.value.filter((d) => d.folder_id !== id)
+    mounts.value = mounts.value.filter((m) => !documents.value.some((d) => d.doc_id === m.doc_id))
+  }
+
+  async function toggleFolderActive(id: string, active: boolean) {
+    const f = folders.value.find((x) => x.id === id)
+    if (f) f.active = active
+  }
+
+  async function toggleDocActive(docId: string, active: boolean) {
+    const d = documents.value.find((x) => x.doc_id === docId)
+    if (d) d.active = active
+  }
+
+  async function mountDocument(docId: string) {
+    const { data } = await kbApi.mountDocument(docId)
+    // 去重
+    if (!mounts.value.find((m) => m.doc_id === docId)) {
+      const doc = documents.value.find((d) => d.doc_id === docId)
+      mounts.value.push({
+        doc_id: docId,
+        filename: doc?.filename || data.filename,
+        summary: data.summary,
+      })
+    }
+  }
+
+  async function unmountDocument(docId: string) {
+    await kbApi.unmountDocument(docId)
+    mounts.value = mounts.value.filter((m) => m.doc_id !== docId)
+  }
+
+  async function moveDocument(docId: string, folderId: string) {
+    await kbApi.moveDocument(docId, folderId)
+    const d = documents.value.find((x) => x.doc_id === docId)
+    if (d) d.folder_id = folderId
+  }
+
+  async function deleteDocument(docId: string) {
+    await kbApi.deleteDocument(docId)
+    documents.value = documents.value.filter((d) => d.doc_id !== docId)
+    mounts.value = mounts.value.filter((m) => m.doc_id !== docId)
+  }
+
+  async function retryDocument(docId: string) {
+    await kbApi.retryDocument(docId)
+    const d = documents.value.find((x) => x.doc_id === docId)
+    if (d) d.status = 'parsing'
+  }
+
+  async function uploadFile(file: File, folderId: string) {
+    const { data } = await kbApi.uploadFile(file, folderId)
+    // 后端返回 doc_id/status，列表会轮询刷新
+    return data
+  }
+
+  return {
+    folders, documents, mounts, loading,
+    activeFolderIds, activeDocIds, mountIds,
+    fetchFolders, fetchDocuments,
+    createFolder, renameFolder, deleteFolder, toggleFolderActive,
+    toggleDocActive, mountDocument, unmountDocument,
+    moveDocument, deleteDocument, retryDocument, uploadFile,
+  }
+})

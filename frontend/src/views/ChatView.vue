@@ -1,21 +1,54 @@
 <script setup lang="ts">
-// 聊天主区占位：阶段三逐步迁移会话侧边栏、消息流、知识库、结果区
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
+import { useKbStore } from '@/stores/kb'
+import SessionSidebar from '@/components/SessionSidebar.vue'
+import ChatMain from '@/components/ChatMain.vue'
+import KbPopover from '@/components/KbPopover.vue'
 
-const placeholder = ref('聊天主区（阶段三迁移）')
+const kb = useKbStore()
+const showKb = ref(false)
+
+onMounted(async () => {
+  try {
+    await kb.fetchFolders()
+    await kb.fetchDocuments()
+  } catch {
+    // 首次加载失败静默
+  }
+})
 </script>
 
 <template>
-  <div class="chat-placeholder">
-    <el-empty description="聊天主区（阶段三逐步迁移：会话侧边栏、消息流、知识库、结果区）" />
+  <div class="chat-view">
+    <SessionSidebar />
+    <ChatMain />
+    <!-- 知识库入口按钮 + 弹层 -->
+    <el-popover
+      v-model:visible="showKb"
+      placement="top-end"
+      :width="560"
+      trigger="click"
+    >
+      <template #reference>
+        <el-button class="kb-entry" type="primary" circle>
+          <el-icon><Folder /></el-icon>
+        </el-button>
+      </template>
+      <KbPopover @close="showKb = false" />
+    </el-popover>
   </div>
 </template>
 
 <style scoped>
-.chat-placeholder {
-  height: 100%;
+.chat-view {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  height: 100%;
+  position: relative;
+}
+.kb-entry {
+  position: absolute;
+  right: 20px;
+  top: 12px;
+  z-index: 10;
 }
 </style>

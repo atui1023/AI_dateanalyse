@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import * as authApi from '@/api/auth'
 import { ElMessage } from 'element-plus'
 
 const router = useRouter()
@@ -10,6 +11,8 @@ const auth = useAuthStore()
 
 const form = ref({ username: '', password: '' })
 const loading = ref(false)
+const showRegister = ref(false)
+const regForm = ref({ username: '', password: '', display_name: '' })
 
 async function handleLogin() {
   if (!form.value.username || !form.value.password) {
@@ -23,6 +26,26 @@ async function handleLogin() {
     router.push(redirect)
   } catch {
     // 错误已由 axios 拦截器统一提示
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleRegister() {
+  const f = regForm.value
+  if (!f.username || !f.password) {
+    ElMessage.warning('用户名和密码必填')
+    return
+  }
+  loading.value = true
+  try {
+    await authApi.register(f.username, f.password, f.display_name || undefined)
+    ElMessage.success('注册成功，请登录')
+    form.value.username = f.username
+    showRegister.value = false
+    regForm.value = { username: '', password: '', display_name: '' }
+  } catch {
+    // axios 拦截器已提示
   } finally {
     loading.value = false
   }
@@ -49,6 +72,27 @@ async function handleLogin() {
         </el-form-item>
         <el-button type="primary" :loading="loading" style="width: 100%" @click="handleLogin">
           登录
+        </el-button>
+        <div class="register-link">
+          <a href="javascript:void(0)" @click="showRegister = !showRegister">
+            没有账号？注册
+          </a>
+        </div>
+      </el-form>
+
+      <!-- 注册表单 -->
+      <el-form v-if="showRegister" @submit.prevent="handleRegister" label-position="top" style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px">
+        <el-form-item label="用户名">
+          <el-input v-model="regForm.username" placeholder="用户名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="regForm.password" type="password" placeholder="密码" show-password />
+        </el-form-item>
+        <el-form-item label="显示名（选填）">
+          <el-input v-model="regForm.display_name" placeholder="显示名" />
+        </el-form-item>
+        <el-button type="primary" :loading="loading" style="width: 100%" @click="handleRegister">
+          注册
         </el-button>
       </el-form>
     </div>
@@ -79,5 +123,10 @@ async function handleLogin() {
   color: var(--text-tertiary);
   font-size: 13px;
   margin-bottom: 24px;
+}
+.register-link {
+  text-align: center;
+  margin-top: 12px;
+  font-size: 13px;
 }
 </style>

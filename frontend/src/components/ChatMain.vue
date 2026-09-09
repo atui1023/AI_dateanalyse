@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionsStore } from '@/stores/sessions'
 import { useKbStore } from '@/stores/kb'
-import { streamChat } from '@/api/chat'
+import { streamChat, AuthError } from '@/api/chat'
 import ChatMessage from './ChatMessage.vue'
 import { ElMessage } from 'element-plus'
 import { Send } from 'lucide-vue-next'
 
 const sessions = useSessionsStore()
 const kb = useKbStore()
+const router = useRouter()
 
 const input = ref('')
 const sending = ref(false)
@@ -133,8 +135,14 @@ async function handleSend() {
     sessions.fetchList()
   } catch (e: any) {
     assistantMsg.streaming = false
-    assistantMsg.text = '网络错误：' + (e.message || '未知错误')
-    ElMessage.error('发送失败')
+    if (e instanceof AuthError) {
+      // session 失效：SPA 路由跳转（不刷新页面、不中止其他请求）
+      ElMessage.error(e.message)
+      router.push('/login')
+    } else {
+      assistantMsg.text = '网络错误：' + (e.message || '未知错误')
+      ElMessage.error('发送失败')
+    }
   } finally {
     sending.value = false
     scrollToBottom()

@@ -8,8 +8,16 @@ const request = axios.create({
   timeout: 30000,
 })
 
-// 401 跳转标志：避免拦截器和路由守卫同时跳转导致请求被中断
+// 401 处理：用动态 import 避免循环依赖，走 SPA router.push（不刷新页面）
 let redirecting = false
+async function redirectToLogin() {
+  if (redirecting || location.pathname === '/login') return
+  redirecting = true
+  const { default: router } = await import('@/router')
+  ElMessage.error('登录已失效，请重新登录')
+  router.push('/login')
+  setTimeout(() => { redirecting = false }, 500)
+}
 
 request.interceptors.response.use(
   (resp) => resp,
@@ -17,18 +25,8 @@ request.interceptors.response.use(
     const status = err.response?.status
     const detail = err.response?.data?.detail || err.response?.data?.message || err.message
     if (status === 401) {
-      // 未登录或 session 失效：清状态，由路由守卫处理跳转
-      // 不在拦截器里用 location.href 跳转，避免中断正在进行的请求
       localStorage.removeItem('user')
-      if (!redirecting && location.pathname !== '/login') {
-        redirecting = true
-        ElMessage.error('登录已失效，请重新登录')
-        // 用 setTimeout 让当前请求链完成 reject，再跳转
-        setTimeout(() => {
-          location.href = '/login'
-          redirecting = false
-        }, 100)
-      }
+      redirectToLogin()
     } else if (status === 403) {
       ElMessage.error('无权访问')
     } else if (status === 422) {

@@ -1,6 +1,13 @@
 // 聊天接口：SSE 流式 + 普通分析
-import { ElMessage } from 'element-plus'
 import request from './request'
+
+// 鉴权错误：session 失效时抛出，调用方用 SPA router.push 跳登录（不用 location.href 避免中止 fetch）
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AuthError'
+  }
+}
 
 export interface ChatPayload {
   messages: { role: 'user' | 'assistant'; content: string }[]
@@ -36,13 +43,10 @@ export async function streamChat(
 
   if (!resp.ok) {
     if (resp.status === 401) {
-      // session 失效：清状态并跳登录页（fetch 不走 axios 拦截器，需手动处理）
+      // session 失效：抛特殊错误，由调用方用 SPA router.push 跳登录页
+      // 不用 location.href（整页刷新会中止 fetch 导致 ERR_ABORTED）
       localStorage.removeItem('user')
-      if (location.pathname !== '/login') {
-        ElMessage.error('登录已失效，请重新登录')
-        location.href = '/login'
-      }
-      throw new Error('登录已失效')
+      throw new AuthError('登录已失效，请重新登录')
     }
     const detail = await resp.text().catch(() => '请求失败')
     throw new Error(detail || `HTTP ${resp.status}`)

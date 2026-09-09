@@ -8,15 +8,20 @@ const request = axios.create({
   timeout: 30000,
 })
 
-// 401 处理：用动态 import 避免循环依赖，走 SPA router.push（不刷新页面）
+// 401 处理器：由 main.ts 启动时注入（那里能拿到真实的 router 实例和 pinia store）
+// 避免在拦截器里动态 import 导致实例取不到 / 时序问题
+let unauthorizedHandler: (() => void) | null = null
+export function setUnauthorizedHandler(fn: () => void) {
+  unauthorizedHandler = fn
+}
+
 let redirecting = false
-async function redirectToLogin() {
-  if (redirecting || location.pathname === '/login') return
+// 单一入口：axios 拦截器和 fetch（chat）都调它，避免跳转逻辑分散
+export function notifyUnauthorized() {
+  if (redirecting) return
   redirecting = true
-  const { default: router } = await import('@/router')
-  ElMessage.error('登录已失效，请重新登录')
-  router.push('/login')
-  setTimeout(() => { redirecting = false }, 500)
+  unauthorizedHandler?.()
+  setTimeout(() => { redirecting = false }, 800)
 }
 
 request.interceptors.response.use(
@@ -25,8 +30,7 @@ request.interceptors.response.use(
     const status = err.response?.status
     const detail = err.response?.data?.detail || err.response?.data?.message || err.message
     if (status === 401) {
-      localStorage.removeItem('user')
-      redirectToLogin()
+      notifyUnauthorized()
     } else if (status === 403) {
       ElMessage.error('无权访问')
     } else if (status === 422) {

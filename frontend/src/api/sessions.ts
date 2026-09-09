@@ -30,6 +30,14 @@ export function deleteSession(sessionId: string) {
   return request.delete(`/sessions/${sessionId}`)
 }
 
+// 后端返回 {session_id, title, mode, messages: [...]} 对象
+export interface SessionMessages {
+  session_id: string
+  title: string
+  mode: string
+  messages: ChatMessage[]
+}
+
 export function getMessages(sessionId: string) {
-  return request.get<ChatMessage[]>(`/sessions/${sessionId}/messages`)
+  return request.get<SessionMessages>(`/sessions/${sessionId}/messages`)
 }

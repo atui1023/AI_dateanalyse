@@ -38,7 +38,7 @@ export const useSessionsStore = defineStore('sessions', () => {
     try {
       const { data } = await sessionsApi.getMessages(id)
       // 后端返回 {session_id, title, mode, messages: [...]}，提取 messages 数组
-      messages.value = Array.isArray(data) ? data : (data?.messages ?? [])
+      messages.value = data?.messages ?? []
     } catch {
       messages.value = []
     }

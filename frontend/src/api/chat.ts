@@ -1,5 +1,4 @@
 // 聊天接口：SSE 流式 + 普通分析
-import request from './request'
 
 // 鉴权错误：session 失效时抛出，调用方用 SPA router.push 跳登录（不用 location.href 避免中止 fetch）
 export class AuthError extends Error {
@@ -25,10 +24,11 @@ export async function streamChat(
   onChunk: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  // 直连后端，绕过 Vite dev proxy（proxy 会缓冲 SSE 流式响应导致前端拿不到实时数据）
-  const isDev = import.meta.env.DEV
-  const baseUrl = isDev ? 'http://127.0.0.1:8000' : ''
-  const resp = await fetch(`${baseUrl}/chat`, {
+  // 同源请求：开发期走 Vite proxy（实测 SSE 分块可正常透传，不缓冲），
+  // 生产期 FastAPI 托管构建产物也是同源。
+  // 切勿直连 127.0.0.1:8000：登录 cookie 由 proxy 源(localhost)种下，
+  // 直连属跨域且 cookie jar 不同，会恒为 401（还会引发 CORS/SameSite 一系列问题）
+  const resp = await fetch('/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',

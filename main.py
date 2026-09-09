@@ -41,16 +41,18 @@ app.add_middleware(
 
 # SessionMiddleware：cookie 签名存储 user_id，30 天有效期
 # secret_key 从 .env 读取，缺失时用固定串（开发环境兜底，生产必须配置）
-# 开发期前端 5173 → 后端 8000 跨域，需 same_site=None 让浏览器接受跨域 cookie
-# 生产环境同源，same_site=None 也无害
+# same_site=lax：前端请求全部同源（开发期走 Vite proxy 5173，生产期 FastAPI 托管），
+# Lax 下同源请求自动带 cookie，且不要求 Secure（http 开发环境可用）。
+# 不能用 same_site="none" + https_only=False：Chrome 会拒收「SameSite=None 但无 Secure」
+# 的 Set-Cookie，表现为登录 cookie 能用、登出时的删除 cookie 被丢弃（session 无法失效）。
 _SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-only-insecure-secret-please-change")
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SESSION_SECRET,
     session_cookie="session",
     max_age=30 * 24 * 3600,  # 30 天
-    same_site="none",
-    https_only=False,  # 开发期 http，生产期反向代理终止 https 时也是 http
+    same_site="lax",
+    https_only=False,  # 开发期 http；生产由反向代理终止 https 时回源也是 http
     path="/",
 )
 

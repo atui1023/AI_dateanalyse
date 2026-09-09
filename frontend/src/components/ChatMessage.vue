@@ -25,12 +25,13 @@ const chartRefs = ref<HTMLElement[]>([])
 const chartInstances: echarts.ECharts[] = []
 
 function renderCharts() {
-  if (!props.result?.chart) return
+  const chart = props.result?.chart
+  if (!chart) return
   nextTick(() => {
     const el = chartRefs.value[0]
     if (el && !chartInstances[0]) {
       const inst = echarts.init(el)
-      inst.setOption(props.result!.chart)
+      inst.setOption(chart)
       chartInstances[0] = inst
     }
   })

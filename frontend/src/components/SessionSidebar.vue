@@ -3,7 +3,7 @@ import { onMounted } from 'vue'
 import { useSessionsStore } from '@/stores/sessions'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Plus, MessageSquare, Edit, Delete, Pencil,
+  Plus, MessageSquare, Delete, Pencil,
 } from 'lucide-vue-next'
 
 const store = useSessionsStore()
@@ -21,7 +21,7 @@ async function handleSelect(id: string) {
   await store.select(id)
 }
 
-async function handleRename(id: string, title: string) {
+async function handleRename(id: string, title: string | null) {
   const { value } = await ElMessageBox.prompt('会话标题', '重命名会话', {
     inputValue: title || '',
     inputPlaceholder: '输入新标题',

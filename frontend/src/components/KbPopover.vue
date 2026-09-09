@@ -89,14 +89,6 @@ async function handleUpload(file: File, folderId: string) {
   }
 }
 
-function handleFileSelect(e: Event) {
-  const target = e.target as HTMLInputElement
-  if (target.files && target.files[0]) {
-    handleUpload(target.files[0], selectedFolderId.value)
-    target.value = ''
-  }
-}
-
 async function handleMount(docId: string) {
   await kb.mountDocument(docId)
   ElMessage.success('已挂载')
@@ -191,7 +183,7 @@ async function handleRefresh() {
         v-for="f in visibleFolders"
         :key="f.id"
         class="folder-group"
-        :class="{ active: selectedFolderId === f.id }"
+        :class="{ active: uploadTarget === f.id }"
       >
         <div class="folder-row" @click="toggleExpand(f.id)">
           <el-icon class="folder-icon"><Folder /></el-icon>

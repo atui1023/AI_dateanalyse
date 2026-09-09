@@ -1,12 +1,13 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import 'element-plus/dist/index.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
 import App from './App.vue'
 import router from './router'
 import { useAuthStore } from './stores/auth'
+import { setUnauthorizedHandler } from './api/request'
 import './styles/main.css'
 
 const app = createApp(App)
@@ -18,6 +19,16 @@ useAuthStore().init()
 
 app.use(router)
 app.use(ElementPlus)
+
+// 注册全局 401 处理器：清登录态 + SPA 跳登录页（用真实 router/store 实例）
+// 必须在 app.use(pinia) 之后，useAuthStore 才能取到实例
+setUnauthorizedHandler(() => {
+  const auth = useAuthStore()
+  auth.user = null
+  localStorage.removeItem('user')
+  ElMessage.error('登录已失效，请重新登录')
+  router.push('/login')
+})
 
 // 注册所有 Element Plus 图标
 for (const [key, comp] of Object.entries(ElementPlusIconsVue)) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, toRaw } from 'vue'
 import * as echarts from 'echarts'
 import { Download, Bookmark, AlertTriangle } from 'lucide-vue-next'
 
@@ -31,16 +31,19 @@ function renderCharts() {
   nextTick(() => {
     const el = chartRef.value
     if (!el || chartInstance) return
+    // ECharts 不应直接接收 Vue Proxy；先转成普通对象，避免复杂 option 被代理后渲染失败。
+    const option = JSON.parse(JSON.stringify(toRaw(chart)))
     // 防御：模型偶尔生成 bar/line series 但漏掉 xAxis/yAxis，ECharts 会报错且不渲染
-    const series = Array.isArray(chart.series) ? chart.series : [chart.series]
+    const series = Array.isArray(option.series) ? option.series : [option.series]
     const needAxis = series.some((s: any) => s && (s.type === 'bar' || s.type === 'line'))
     if (needAxis) {
-      if (!chart.xAxis) chart.xAxis = { type: 'category', data: series[0]?.data?.map((_: any, i: number) => i + 1) || [] }
-      if (!chart.yAxis) chart.yAxis = { type: 'value' }
+      if (!option.xAxis) option.xAxis = { type: 'category', data: series[0]?.data?.map((_: any, i: number) => i + 1) || [] }
+      if (!option.yAxis) option.yAxis = { type: 'value' }
     }
     try {
       chartInstance = echarts.init(el)
-      chartInstance.setOption(chart)
+      chartInstance.setOption(option, { notMerge: true })
+      chartInstance.resize()
     } catch (e) {
       console.warn('[chart] 渲染失败:', e)
     }
@@ -60,6 +63,10 @@ function exportChart() {
 
 onMounted(renderCharts)
 watch(() => props.result, renderCharts, { deep: true })
+onBeforeUnmount(() => {
+  chartInstance?.dispose()
+  chartInstance = null
+})
 </script>
 
 <template>

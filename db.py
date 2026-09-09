@@ -20,7 +20,7 @@ from password_utils import hash_password
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data_analysis.db")
 if not DATABASE_URL:
     raise RuntimeError(
         "未读取到 DATABASE_URL，请检查项目目录下的 .env 文件（参考 .env.example）"
@@ -34,6 +34,10 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
+# SQLite only auto-increments a column declared exactly as INTEGER PRIMARY KEY.
+# Keep BIGINT on MySQL while using INTEGER for local SQLite databases.
+AUTO_ID_TYPE = BigInteger().with_variant(Integer, "sqlite")
+
 
 class Base(DeclarativeBase):
     pass
@@ -43,7 +47,7 @@ class Base(DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -105,7 +109,7 @@ class Session(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(32), ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -115,7 +119,7 @@ class ChatMessage(Base):
 
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     session_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
@@ -130,7 +134,7 @@ class AnalysisResult(Base):
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
     user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
@@ -160,8 +164,9 @@ def get_session():
 
 DEFAULT_USER_ID = 1
 DEFAULT_USERNAME = "admin"
-DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # 缺省密码，生产环境务必通过 .env 覆盖
-
+DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+if not DEFAULT_ADMIN_PASSWORD:
+    raise RuntimeError("未设置 ADMIN_PASSWORD，请在 .env 中设置强密码")
 
 def ensure_default_user() -> int:
     """确保默认用户存在，返回其 id（单用户模式下所有数据归属此用户）

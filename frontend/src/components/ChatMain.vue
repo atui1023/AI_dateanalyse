@@ -33,6 +33,7 @@ onMounted(() => {
     streamMessages.value = sessions.messages.map((m) => ({
       role: m.role as 'user' | 'assistant',
       text: m.content,
+      result: m.result ?? null,
     }))
     scrollToBottom()
   }
@@ -42,7 +43,11 @@ onMounted(() => {
 function syncFromSession() {
   const msgs = sessions.messages
   streamMessages.value = Array.isArray(msgs)
-    ? msgs.map((m) => ({ role: m.role as 'user' | 'assistant', text: m.content }))
+    ? msgs.map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        text: m.content,
+        result: m.result ?? null,
+      }))
     : []
   scrollToBottom()
 }

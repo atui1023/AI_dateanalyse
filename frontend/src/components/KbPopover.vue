@@ -228,8 +228,12 @@ async function handleRefresh() {
             <span v-if="d.status === 'ready'" class="st st-ready">
               <el-icon><Check /></el-icon> 就绪
             </span>
-            <span v-else-if="d.status === 'failed'" class="st st-failed">
-              <el-icon><AlertTriangle /></el-icon> 失败
+            <span
+              v-else-if="d.status === 'failed'"
+              class="st st-failed"
+              :title="d.error_msg || '知识库处理失败'"
+            >
+              <el-icon><AlertTriangle /></el-icon> 知识库处理失败
               <el-button size="small" text @click="handleRetry(d.doc_id)">重试</el-button>
             </span>
             <span v-else class="st st-parsing">
@@ -245,11 +249,11 @@ async function handleRefresh() {
               title="取消挂载"
             >df{{ mountIndex(d.doc_id) + 1 }}</el-button>
             <el-button
-              v-else-if="isTableFile(d.filename) && d.status === 'ready'"
+              v-else-if="isTableFile(d.filename)"
               size="small"
               text
               @click="handleMount(d.doc_id)"
-              title="挂载为分析数据集"
+              title="挂载为分析数据集（不依赖知识库向量化）"
             ><el-icon><PlusCircle /></el-icon></el-button>
 
             <!-- 操作 -->

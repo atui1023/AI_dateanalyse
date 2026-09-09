@@ -62,6 +62,16 @@ def get_embeddings():
     """Embedding 客户端（懒加载，全进程复用）"""
     global _embeddings
     if _embeddings is None:
+        invalid_values = ("your_", "replace_", "your-llm-endpoint")
+        if (
+            not API_KEY
+            or not BASE_URL
+            or any(token in API_KEY.lower() for token in invalid_values)
+            or any(token in BASE_URL.lower() for token in invalid_values)
+        ):
+            raise RuntimeError(
+                "知识库向量化未配置：请在 .env 中填写真实的 API_KEY 和 BASE_URL"
+            )
         from langchain_openai import OpenAIEmbeddings
 
         _embeddings = OpenAIEmbeddings(
@@ -334,7 +344,10 @@ def _do_ingest(doc_id: str) -> None:
         doc["error"] = ""
     except Exception as e:
         try:  # 清理半成品向量
-            get_vectordb()._collection.delete(where={"doc_id": doc_id})
+            owner_id = doc.get("user_id", DEFAULT_USER_ID)
+            get_vectordb()._collection.delete(
+                where={"$and": [{"doc_id": doc_id}, {"user_id": owner_id}]}
+            )
         except Exception:
             pass
         doc["status"] = STATUS_FAILED
@@ -424,7 +437,7 @@ def delete_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> Optional[dic
     返回被删记录（供调用方清理磁盘文件与内存数据集）。"""
     doc = _find_doc(doc_id, user_id)
     try:
-        get_vectordb()._collection.delete(where={"doc_id": doc_id})
+        get_vectordb()._collection.delete(where={"$and": [{"doc_id": doc_id}, {"user_id": user_id}]})
     except Exception as e:
         print("kb delete vectors failed:", e, file=sys.stderr)
     if doc is not None:

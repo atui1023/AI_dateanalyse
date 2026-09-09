@@ -70,7 +70,7 @@ ANALYSIS_PROMPT_TEMPLATE = """你是一名严谨的数据分析师。用户上�
 【代码规范】
 1. 只做只读分析：不读写文件、不联网；可用库：pandas（pd）、numpy（np）、scipy、scikit-learn（sklearn）、statsmodels（均已预装，可直接 import）；禁止 import matplotlib、seaborn、plotly 等绘图库（未安装），图表只能通过下面的 chart 变量交给前端渲染
 2. 禁止调用任何退出函数：exit()、quit()、sys.exit()、os._exit() 等。代码在沙箱中执行，由沙箱统一接管结束；调用退出函数会导致分析失败、结果无法回传
-3. 引用列名必须与摘要中原样一致（注意空格和大小写）；不确定列是否存在时，先 print(df.columns) 确认再取列
+3. 引用列名必须与摘要中原样一致（注意空格和大小写）；不确定列是否存在时，先 print(df.columns) 确认再取列。重命名列后，后续所有代码必须使用新列名，不能再访问旧列名
 4. 需要跨文件关联分析时，用 pd.merge / pd.concat / join 等，先在代码中确认关联键存在并完成合并，再统计
 5. 代码要稳健：过滤、聚合前先处理缺失值（dropna 或 fillna，并在结论中说明口径）；分组结果按业务含义排序（如排名类默认降序）
 6. 若上方【业务知识库参考】定义了指标口径、计算公式、过滤条件或单位换算，必须按其执行，不得使用默认算法；业务知识与数据实际列对不上时，以数据为准并在结论中说明差异
@@ -88,6 +88,9 @@ ANALYSIS_PROMPT_TEMPLATE = """你是一名严谨的数据分析师。用户上�
    - 即使是简单查询，只要有分类/对比数据就必须生成图表
 10. 只输出一个 ```python 代码块，代码块之外可以有简短的中文说明
 11. 若用户的问题在数据中无法回答（缺少列、口径不明），不要硬算：在说明中解释缺少什么，并给出最接近的可行分析
+
+【执行前自检】
+12. 输出代码前检查每个 DataFrame 列名引用是否存在，尤其检查 rename 后的列名；检查 chart 的 xAxis.data 与 series.data 长度一致；确保 result、chart 和 print 都在可能出错的计算之后正确赋值
 
 【输出示例】
 ```python
@@ -198,6 +201,26 @@ class ModelConnectionError(Exception):
     """模型服务连接失败（网络波动等），用于给前端友好提示"""
 
 
+def _connection_error_message(error: Exception, max_retries: int) -> str:
+    causes = []
+    current: Optional[BaseException] = error
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        causes.append(str(current))
+        current = current.__cause__ or current.__context__
+    detail = " ".join(causes)
+    if "WinError 10013" in detail:
+        return (
+            "模型连接被 Windows 网络权限或防火墙阻止（WinError 10013）。"
+            "请通过 start.bat 或桌面快捷方式重新启动本地服务后再试"
+        )
+    return (
+        f"模型服务连续 {max_retries} 次连接失败，请检查网络、代理以及 "
+        ".env 中的 BASE_URL"
+    )
+
+
 def stream_completion(messages: List[Dict[str, str]], max_retries: int = 3) -> Iterator[str]:
     """流式调用主对话链，逐段产出回复文本。
 
@@ -213,9 +236,7 @@ def stream_completion(messages: List[Dict[str, str]], max_retries: int = 3) -> I
     except StopIteration:
         return
     except (APIConnectionError, APITimeoutError) as e:
-        raise ModelConnectionError(
-            f"模型服务连续 {max_retries} 次连接失败，可能是网络波动，请稍后重发消息"
-        ) from e
+        raise ModelConnectionError(_connection_error_message(e, max_retries)) from e
     yield first
     for chunk in iterator:
         if chunk:

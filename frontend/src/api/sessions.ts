@@ -12,6 +12,12 @@ export interface Session {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  result?: {
+    stdout?: string | null
+    table?: { columns: string[]; rows: any[][]; truncated?: boolean } | null
+    chart?: Record<string, any> | null
+    error?: string | null
+  } | null
 }
 
 export function listSessions() {

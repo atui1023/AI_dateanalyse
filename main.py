@@ -21,7 +21,8 @@ import llm
 from auth import get_current_user
 # 审计日志通过 auth.log_action 调用（用模块前缀更清晰，避免和本地变量混淆）
 from db import (
-    AnalysisResult, ChatMessage, Session as DbSession, User, ensure_default_user, get_session,
+    AnalysisResult, Base, ChatMessage, Session as DbSession, User, engine,
+    ensure_default_user, get_session,
 )
 
 app = FastAPI(title="AI 数据分析")
@@ -45,7 +46,9 @@ app.add_middleware(
 # Lax 下同源请求自动带 cookie，且不要求 Secure（http 开发环境可用）。
 # 不能用 same_site="none" + https_only=False：Chrome 会拒收「SameSite=None 但无 Secure」
 # 的 Set-Cookie，表现为登录 cookie 能用、登出时的删除 cookie 被丢弃（session 无法失效）。
-_SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-only-insecure-secret-please-change")
+_SESSION_SECRET = os.getenv("SESSION_SECRET")
+if not _SESSION_SECRET:
+    raise RuntimeError("未设置 SESSION_SECRET，请在 .env 中设置随机密钥")
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SESSION_SECRET,
@@ -394,6 +397,8 @@ def run_analysis(active_datasets: List[dict], code: str) -> dict:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
             timeout=30,
         )
     except subprocess.TimeoutExpired:
@@ -646,18 +651,49 @@ def delete_session(session_id: str, request: Request, user: User = Depends(get_c
 
 @app.get("/sessions/{session_id}/messages")
 def get_session_messages(session_id: str, user: User = Depends(get_current_user)):
-    """返回会话消息历史（role、content）"""
+    """返回会话消息历史，并恢复已保存的分析表格/图表结果。"""
     with get_session() as db:
         s = get_owned_session(db, session_id, user)
         msgs = (db.query(ChatMessage)
                 .filter(ChatMessage.session_id == session_id)
                 .order_by(ChatMessage.id.asc())
                 .all())
+        results = (db.query(AnalysisResult)
+                   .filter(AnalysisResult.session_id == session_id,
+                           AnalysisResult.user_id == user.id)
+                   .order_by(AnalysisResult.id.asc())
+                   .all())
+        result_queue = list(results)
+
+        def result_payload(item: AnalysisResult) -> dict:
+            def parse_json(raw: Optional[str]):
+                if not raw:
+                    return None
+                try:
+                    return json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    return None
+
+            payload = {
+                "stdout": item.stdout,
+                "table": parse_json(item.table_json),
+                "chart": parse_json(item.chart_json),
+            }
+            if item.error_msg:
+                payload["error"] = item.error_msg
+            return payload
+
+        messages = []
+        for message in msgs:
+            item = {"role": message.role, "content": message.content}
+            if message.role == "assistant" and result_queue:
+                item["result"] = result_payload(result_queue.pop(0))
+            messages.append(item)
         return {
             "session_id": session_id,
             "title": s.title or "新会话",
             "mode": s.mode,
-            "messages": [{"role": m.role, "content": m.content} for m in msgs],
+            "messages": messages,
         }
 
 
@@ -672,6 +708,7 @@ def index():
 
 
 # 启动时确保默认 admin 用户存在（用 .env 的 ADMIN_PASSWORD 生成 bcrypt 哈希）
+Base.metadata.create_all(bind=engine)
 ensure_default_user()
 # 多用户隔离：向量库一致性维护（幂等）——补历史块 user_id + 清孤儿向量
 try:

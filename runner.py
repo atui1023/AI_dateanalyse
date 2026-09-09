@@ -20,6 +20,30 @@ import sys
 import tempfile
 import warnings
 
+
+def _configure_utf8_stdio() -> None:
+    """让 Windows 沙箱输出不受父进程 GBK 控制台编码影响。"""
+    # Always override inherited console encoding.
+    os.environ["PYTHONIOENCODING"] = "utf-8:replace"
+    os.environ["PYTHONUTF8"] = "1"
+    streams = {
+        sys.stdout,
+        sys.stderr,
+        getattr(sys, "__stdout__", None),
+        getattr(sys, "__stderr__", None),
+    }
+    for stream in streams:
+        if stream is None:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
+
+# Windows 默认控制台可能是 GBK；分析输出统一使用 UTF-8，支持中文和 emoji。
+_configure_utf8_stdio()
+
 import numpy as np
 import pandas as pd
 

@@ -35,7 +35,7 @@ export function createUser(username: string, password: string, display_name?: st
 }
 
 export function resetPassword(userId: number, password: string) {
-  return request.patch(`/auth/admin/users/${userId}/password`, { password })
+  return request.patch(`/auth/admin/users/${userId}/password`, { new_password: password })
 }
 
 export function deleteUser(userId: number) {

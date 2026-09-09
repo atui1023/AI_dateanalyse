@@ -1,89 +1,170 @@
-# AI 数据分析助手
+# AI 数据分析平台
 
-一个基于 AI 大模型的 Web 应用，支持两种工作模式：
+一个面向业务数据分析和企业知识问答的 Web 平台。用户可以上传 CSV、Excel、TXT、Markdown 或 PDF，通过自然语言生成 pandas 分析代码、结果表格和 ECharts 图表，也可以使用 RAG 检索知识库文档。
 
-- **数据分析**：上传 CSV / Excel，用自然语言提问，AI 自动生成 pandas 分析代码并在沙箱中执行，返回结论、结果表格和 ECharts 交互图表
-- **知识库问答（RAG）**：上传 TXT / MD / PDF 文档入库，基于文档内容问答，回答附带原文出处，不编造内容
+## 主要能力
 
-核心特性：
+- **自然语言数据分析**：表格挂载为 `df1`、`df2` 等变量，由模型生成只读 pandas 代码并在独立子进程中执行。
+- **分析结果可视化**：返回文字结论、结构化表格和 ECharts 柱状图、折线图或饼图。
+- **知识库问答**：文档解析、分块、Embedding、Chroma 向量检索和来源引用。
+- **多用户隔离**：bcrypt 密码哈希、Session Cookie、用户数据隔离和管理员后台。
+- **会话持久化**：保存聊天消息和分析结果，重新进入会话后恢复表格与图表。
+- **文件管理**：知识库文件夹、文档移动、启用/停用、失败重试及表格挂载。
+- **Windows 兼容**：分析执行器统一使用 UTF-8，支持中文、`✓`、`✅` 等字符。
 
-- **多用户账号体系**：注册 / 登录（bcrypt 密码哈希 + session cookie 鉴权），数据按用户隔离；管理员可进入后台管理用户
-- **会话历史**：对话自动保存为会话，侧边栏可切换 / 重命名 / 删除，多轮对话上下文完整保留
-- **数据集挂载**：数据分析模式下把文件挂载为 `df1 / df2……`，挂载状态刷新后保留，且严格按当前账号隔离
-- **知识库文件夹分类**：文档可归入不同知识库（文件夹），支持新建 / 重命名 / 删除 / 移动文件
-- **文件级检索控制**：每个文档可单独勾选是否参与检索，按需组合知识库与文档
-- **多轮对话上下文**：RAG 模式下自动改写追问为独立完整问题，提升检索准确率
-- **异步解析与状态追踪**：文档上传后后台解析向量化，界面实时显示解析中 / 已就绪 / 失败状态
+## 技术栈
 
-技术栈：
+- 后端：FastAPI、LangChain、OpenAI SDK、pandas、SQLAlchemy 2.0
+- 数据库：SQLite（默认）或 MySQL
+- 知识库：Chroma、OpenAI 兼容 Embedding API、pypdf
+- 前端：Vue 3、Vite、TypeScript、Pinia、Element Plus、ECharts
 
-- 后端：FastAPI + LangChain（RAG）+ OpenAI SDK（对话/分析）+ Chroma（向量库）+ pandas + SQLAlchemy 2.0（SQLite）
-- 前端：Vue 3 + Vite + TypeScript + Element Plus + Pinia + ECharts
-
-## 文件说明
+## 目录结构
 
 | 文件/目录 | 作用 |
 |---|---|
-| `main.py` | FastAPI 后端主程序。路由：`/auth` 注册登录、`/chat` 流式对话（SSE，支持 chat/analysis/rag 三种模式）、`/sessions` 会话历史、`/upload` 数据文件上传、`/kb/*` 知识库与文档、`/datasets` 数据集、`/admin` 管理员接口 |
-| `llm.py` | 模型调用层。集中管理 API_KEY / BASE_URL / MODEL 配置、各场景 prompt 模板（普通聊天 / 数据分析 / RAG / 追问改写）、流式调用与断线自动重试。**换模型或换框架只改这个文件** |
-| `kb.py` | RAG 知识库模块（LangChain 实现）。文件夹与文档元数据管理、文档解析（TXT/MD/PDF/CSV）→ 中文切分（500 字/段）→ text-embedding-v3 向量化 → Chroma 存储 → 按用户 / 知识库 / 文档过滤的相似度检索 top-2 |
-| `auth.py` | 账号与鉴权模块。注册 / 登录 / 登出、bcrypt 密码校验、session cookie、用户操作审计日志 |
-| `db.py` | SQLAlchemy 2.0 数据访问层。用户、会话、消息、分析结果、知识库元数据等表的声明式模型（连接串读 `.env` 的 `DATABASE_URL`，默认 SQLite） |
-| `runner.py` | 沙箱执行器。在独立子进程中运行模型生成的 pandas 代码（30 秒超时、只读、禁联网），输出结构化结果（结论 / 表格 / ECharts 图表配置） |
-| `frontend/` | **Vue 3 前端工程**。Vite + TypeScript + Element Plus + Pinia；`src/api` 接口封装、`src/stores` Pinia 状态（auth/sessions/kb）、`src/components` 聊天与知识库组件、`src/views` 登录 / 聊天 / 管理页 |
-| `static/index.html` | 旧版原生 HTML/JS 页面（后端 8000 端口根路由仍提供，用于兼容；新版界面请用 Vite 5173） |
-| `.env` | 本地私密配置：API_KEY、BASE_URL、MODEL、EMBEDDING_MODEL、DATABASE_URL 等。**不会被 git 提交** |
-| `.env.example` | 配置模板。新环境部署时复制为 `.env` 并填入自己的配置 |
-| `requirements.txt` | Python 依赖清单（fastapi、langchain、chromadb、pandas、sqlalchemy 等） |
-| `start.vbs` / `start.bat` / `stop.bat` | 后端一键启动 / 停止脚本（vbs 无窗口，bat 带控制台） |
-| `uploads/` | 运行时目录：用户上传的数据文件（`uploads/kb/` 为知识库文档） |
-| `chroma_db/` | 运行时目录：RAG 向量库的本地持久化数据 |
+| `main.py` | FastAPI 路由、SSE 聊天、文件上传、分析执行和会话持久化 |
+| `llm.py` | 模型客户端、分析/RAG Prompt、流式输出和连接错误处理 |
+| `runner.py` | 受限分析执行器，输出文字、表格和 ECharts 配置 |
+| `kb.py` | 文档解析、切分、向量化、Chroma 检索和知识库管理 |
+| `db.py` | 用户、会话、消息、分析结果和知识库 ORM 模型 |
+| `auth.py` | 登录、注册、管理员接口、Session 和审计日志 |
+| `frontend/` | Vue 3 前端工程 |
+| `start.bat` | 推荐的 Windows 一键启动入口 |
+| `start.vbs` | 无窗口启动入口 |
+| `stop.bat` | 停止后端服务 |
+| `ROADMAP.md` | 产品发展清单 |
+
+## 环境要求
+
+- Windows 10/11
+- Python 3.10+
+- Node.js 18+
+- 一个支持 OpenAI 接口格式的聊天模型和 Embedding 服务
 
 ## 快速开始
 
-环境要求：Windows + Python 3.10+ + Node.js 18+
-
 ```powershell
-# 1. 克隆并进入目录
-git clone https://github.com/atui1023/AI_dateanalyse.git aidataanalysis
-cd aidataanalysis
+git clone https://github.com/atui1023/AI_dateanalyse.git
+cd AI_dateanalyse
 
-# 2. 后端：创建虚拟环境并安装依赖
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3. 配置
-copy .env.example .env
-# 编辑 .env，填入阿里云百炼 API Key（https://bailian.console.aliyun.com/）和 DATABASE_URL（默认 SQLite，可留用模板默认值）
-
-# 4. 启动后端（127.0.0.1:8000，提供 API）
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
-# 或直接双击 start.vbs / start.bat
-
-# 5. 启动前端（另开一个终端；127.0.0.1:5173，接口经 Vite 代理转发到 8000）
 cd frontend
 npm install
-npm run dev
+cd ..
+
+Copy-Item .env.example .env
 ```
 
-浏览器打开 **http://localhost:5173** 即为新版 Vue 界面（首次使用请先注册账号，或用 `.env` 中 `ADMIN_PASSWORD` 设置的默认管理员登录）。
+编辑 `.env`：
 
-> 说明：开发期前端走 Vite 5173、后端走 8000，二者同源代理，登录 cookie 正常；`http://127.0.0.1:8000/` 目前仍是旧版静态页。前端生产构建用 `cd frontend && npm run build`（产物在 `frontend/dist`）。
+```env
+API_KEY=你的真实API密钥
+BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MODEL=qwen-plus
+EMBEDDING_MODEL=text-embedding-v3
 
-## 使用说明
+DATABASE_URL=sqlite:///./data_analysis.db
+SESSION_SECRET=请替换为随机长字符串
+ADMIN_PASSWORD=请设置管理员强密码
+```
 
-1. **注册 / 登录**：首次进入先注册账号并登录；各账号的知识库、数据集、对话互相隔离
-2. **数据分析**：上传 CSV/Excel（最多 10 个，可多选）→ 切换到「数据分析」模式并挂载文件 → 用中文提问，如"各区域销售额排名"、"对比两个文件的差异"；回答下方展示分析结论、结果表格和可视化图表
-3. **知识库问答**：切到「知识库」模式 → 上传 TXT/MD/PDF（最多 10 个）→ 提问，如"住宿报销标准是多少"，回答下方可展开"依据来源"核对原文
-4. **知识库管理**：点击右下角文件夹图标打开管理面板，可新建知识库、重命名、删除，以及在知识库之间移动文档
-5. **检索范围控制**：在知识库管理面板中勾选或取消勾选整个知识库或单个文档，仅勾选的内容参与检索
-6. **历史会话**：左侧边栏自动保存历史会话，可切换查看、重命名或删除
-7. 三种模式均支持多轮对话（追问上下文）与流式输出
+可以生成随机 Session 密钥：
 
-## 注意事项
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
-- 模型调用按 token 计费，走你自己的 API Key；前端不接触 Key，全部由后端代理
-- 扫描版（图片型）PDF 无法提取文字，入库时会提示
-- 数据分析代码在受限沙箱中执行：只读、30 秒超时、禁止联网和文件读写
-- `.env` 中的 API Key、数据库密码等请勿分享或提交到 git
+### 一键启动
+
+双击 `start.bat`，脚本会：
+
+1. 替换占用 `8000` 的旧后端进程。
+2. 替换占用 `5173` 的旧前端进程。
+3. 使用 UTF-8 环境启动 FastAPI 和 Vue。
+4. 打开 `http://localhost:5173/`。
+
+不希望显示命令窗口时可双击 `start.vbs`。默认管理员用户名为 `admin`，密码是 `.env` 中的 `ADMIN_PASSWORD`。
+
+### 手动启动
+
+```powershell
+# 终端一：后端
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+
+# 终端二：前端
+cd frontend
+npm run dev -- --host 127.0.0.1 --strictPort
+```
+
+## 使用流程
+
+### 数据分析
+
+1. 登录后打开知识库文件面板。
+2. 上传 CSV 或 Excel。
+3. 点击文件右侧的加号，将文件挂载为 `df1`、`df2`。
+4. 保持“数据分析”模式，用自然语言提出排名、趋势、占比、异常或关联分析问题。
+
+表格挂载和 pandas 分析不依赖知识库向量化。即使 Embedding 暂时失败，CSV/Excel 仍可挂载分析。
+
+### 知识库问答
+
+1. 创建或选择知识库文件夹。
+2. 上传 TXT、Markdown、PDF、CSV 或 Excel。
+3. 等待状态变为“就绪”。
+4. 切换到知识库模式并提问。
+
+知识库必须正确配置 `API_KEY`、`BASE_URL` 和 `EMBEDDING_MODEL`。扫描版 PDF 暂不支持 OCR。
+
+## 常见问题
+
+### 模型服务连续连接失败
+
+先检查 `.env` 中是否仍为占位值，并确认 `BASE_URL` 以 OpenAI 兼容 API 的版本路径结尾。
+
+如果底层错误为 `WinError 10013`，说明 Windows 阻止了当前 Python 进程访问外网：
+
+1. 运行 `stop.bat`。
+2. 从资源管理器双击 `start.bat`，不要从限制网络的沙箱或自动化进程启动。
+3. 必要时在 Windows 防火墙中允许项目虚拟环境和实际 Python 解释器访问网络。
+
+### 文件显示“知识库处理失败”
+
+这通常是 Embedding 服务不可用，不代表 CSV/Excel 无法读取。表格文件仍可点击加号挂载进行数据分析；RAG 检索则需要修复 Embedding 配置后点击“重试”。
+
+### GBK 无法输出特殊字符
+
+当前版本在后端和分析子进程中强制使用 UTF-8，并使用安全替换策略处理控制台编码。请通过最新启动脚本重新启动后再测试。
+
+### 图表没有显示
+
+- 确认模型生成了 `chart` 变量，并且 `series.data` 与横轴数据长度一致。
+- 使用 `Ctrl + F5` 刷新前端。
+- 历史分析结果会随会话消息重新加载；旧版本未保存的图表无法追溯恢复。
+
+## 验证
+
+```powershell
+# Windows GBK/UTF-8 回归测试
+.\.venv\Scripts\python.exe tests\test_runner_encoding.py
+
+# 后端语法检查
+.\.venv\Scripts\python.exe -m py_compile main.py llm.py kb.py db.py runner.py
+
+# 前端类型检查和生产构建
+cd frontend
+npm run build
+```
+
+## 安全说明
+
+- `.env`、数据库、上传文件、日志和向量库均已排除在 Git 之外。
+- 不要把 API Key、数据库密码或 Session 密钥提交到仓库。
+- 模型生成的代码仅用于只读分析，但生产部署仍应增加操作系统级 CPU、内存、文件和网络隔离。
+- 模型和 Embedding 调用会使用你自己的 API 配额并产生费用。
+
+后续功能规划见 [`ROADMAP.md`](ROADMAP.md)。

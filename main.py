@@ -45,8 +45,42 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 KB_DIR = os.path.join(UPLOAD_DIR, "kb")
 os.makedirs(KB_DIR, exist_ok=True)
 
-# 内存中保存已上传数据集的信息：dataset_id -> {path, filename, summary}
-datasets: Dict[str, dict] = {}
+# 内存中保存已挂载数据集的信息，按用户严格隔离：
+#   user_id -> { doc_id -> {path, ext, filename, summary, doc_id} }
+# 用户只能看到/分析自己挂载的数据集，互不可见。
+datasets: Dict[int, Dict[str, dict]] = {}
+
+
+def user_datasets(user_id: int) -> Dict[str, dict]:
+    """返回指定用户的挂载 dict（不存在则初始化）"""
+    return datasets.setdefault(user_id, {})
+
+
+def mount_dataset(user_id: int, doc_id: str, info: dict) -> None:
+    """为用户挂载（或刷新）一个数据集"""
+    user_datasets(user_id)[doc_id] = info
+
+
+def unmount_dataset(user_id: int, doc_id: str) -> None:
+    """卸载指定用户的某个数据集（不存在不报错）"""
+    user_datasets(user_id).pop(doc_id, None)
+
+
+def get_active_datasets(user_id: int, doc_ids: List[str]) -> List[dict]:
+    """按前端传入顺序收集当前用户挂载的数据集（对应 df1、df2……）。
+    非本人挂载的 doc_id 直接忽略，杜绝跨用户访问他人数据。"""
+    mine = user_datasets(user_id)
+    return [mine[i] for i in doc_ids if i in mine]
+
+
+def get_owned_session(db, session_id: str, user: User) -> DbSession:
+    """统一会话归属校验：不存在或不属于当前用户一律 404（不暴露会话是否存在）。
+    所有会话相关路由必须经此函数取会话，防止漏口导致跨用户访问。"""
+    s = db.get(DbSession, session_id)
+    if s is None or s.user_id != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+    return s
+
 
 ALLOWED_EXT = (".csv", ".xlsx", ".xls")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
@@ -135,13 +169,13 @@ async def upload(file: UploadFile = File(...), user: User = Depends(get_current_
 
     doc = kb.register_document(save_path, ext, filename, user_id=user.id)  # 状态=解析中，后台向量化
     summary = build_summary(df)
-    datasets[doc["doc_id"]] = {
+    mount_dataset(user.id, doc["doc_id"], {
         "path": save_path,
         "ext": ext,
         "filename": filename,
         "summary": summary,
         "doc_id": doc["doc_id"],
-    }
+    })
     return {
         "dataset_id": doc["doc_id"],
         "doc_id": doc["doc_id"],
@@ -155,7 +189,7 @@ async def upload(file: UploadFile = File(...), user: User = Depends(get_current_
 def remove_dataset(dataset_id: str, user: User = Depends(get_current_user)):
     """取消挂载数据集：仅移除内存中的分析挂载（df1、df2……），
     文件本身与向量数据保留在知识库“临时文件”区，如需彻底删除请用知识库删除接口。"""
-    datasets.pop(dataset_id, None)
+    unmount_dataset(user.id, dataset_id)
     return {"ok": True}
 
 
@@ -175,13 +209,16 @@ def kb_mount(doc_id: str, user: User = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"文件解析失败：{e}")
     summary = build_summary(df)
-    datasets[doc_id] = {
+    # 挂载数量上限按用户计数
+    if doc_id not in user_datasets(user.id) and len(user_datasets(user.id)) >= MAX_DATASETS:
+        raise HTTPException(status_code=400, detail=f"最多同时挂载 {MAX_DATASETS} 个数据集，请先卸载部分文件")
+    mount_dataset(user.id, doc_id, {
         "path": rec["path"],
         "ext": rec["ext"],
         "filename": rec["filename"],
         "summary": summary,
         "doc_id": doc_id,
-    }
+    })
     return {"dataset_id": doc_id, "filename": rec["filename"], "summary": summary}
 
 
@@ -225,7 +262,10 @@ def kb_documents(user: User = Depends(get_current_user)):
 def kb_delete(doc_id: str, request: Request, user: User = Depends(get_current_user)):
     """删除知识库文档：同步清理向量块/向量（防幽灵数据）+ 注册表记录 + 磁盘文件 + 分析挂载"""
     rec = kb.delete_document(doc_id, user_id=user.id)
-    datasets.pop(doc_id, None)  # 若正挂载为 df，一并取消挂载
+    if rec is None:
+        # 文档不存在或不属于当前用户：统一 404，不泄露资源是否存在
+        raise HTTPException(status_code=404, detail="文档不存在或无权访问")
+    unmount_dataset(user.id, doc_id)  # 若正挂载为 df，一并取消挂载（仅本人命名空间）
     if rec and rec.get("path") and os.path.exists(rec["path"]):
         try:
             os.remove(rec["path"])
@@ -386,16 +426,15 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
     三种场景：数据分析（挂载数据集）/ RAG 知识库问答（mode=rag）/ 普通聊天
     持久化：用户消息先落库，流式结束追加 assistant 消息 + 分析结果
     """
-    # 按前端传入顺序收集当前挂载的数据集（对应 df1、df2……）
-    active = [datasets[i] for i in req.dataset_ids if i in datasets]
+    # 按前端传入顺序收集"当前用户"挂载的数据集（对应 df1、df2……）
+    # 非本人挂载的 doc_id 一律忽略，防止跨用户分析他人数据
+    active = get_active_datasets(user.id, req.dataset_ids)
 
     # —— 会话归属校验 / 新建会话 ——
     session_id = req.session_id
     with get_session() as db:
         if session_id:
-            sess = db.get(DbSession, session_id)
-            if sess is None or sess.user_id != user.id:
-                raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+            get_owned_session(db, session_id, user)
         else:
             session_id = uuid.uuid4().hex
             sess = DbSession(session_id=session_id, user_id=user.id,
@@ -559,9 +598,7 @@ def create_session(payload: dict = None, user: User = Depends(get_current_user))
 def rename_session(session_id: str, payload: dict, user: User = Depends(get_current_user)):
     """重命名会话（仅限本人会话）"""
     with get_session() as db:
-        s = db.get(DbSession, session_id)
-        if s is None or s.user_id != user.id:
-            raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+        s = get_owned_session(db, session_id, user)
         title = (payload.get("title") or "").strip()
         if not title:
             raise HTTPException(status_code=400, detail="标题不能为空")
@@ -577,9 +614,7 @@ def rename_session(session_id: str, payload: dict, user: User = Depends(get_curr
 def delete_session(session_id: str, request: Request, user: User = Depends(get_current_user)):
     """删除会话（仅限本人会话）"""
     with get_session() as db:
-        s = db.get(DbSession, session_id)
-        if s is None or s.user_id != user.id:
-            raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+        s = get_owned_session(db, session_id, user)
         # 先删子表（ON DELETE CASCADE 应已生效，但显式删更稳）
         db.query(ChatMessage).filter(ChatMessage.session_id == session_id).delete()
         db.query(AnalysisResult).filter(AnalysisResult.session_id == session_id).delete()
@@ -594,9 +629,7 @@ def delete_session(session_id: str, request: Request, user: User = Depends(get_c
 def get_session_messages(session_id: str, user: User = Depends(get_current_user)):
     """返回会话消息历史（role、content）"""
     with get_session() as db:
-        s = db.get(DbSession, session_id)
-        if s is None or s.user_id != user.id:
-            raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+        s = get_owned_session(db, session_id, user)
         msgs = (db.query(ChatMessage)
                 .filter(ChatMessage.session_id == session_id)
                 .order_by(ChatMessage.id.asc())
@@ -621,3 +654,11 @@ def index():
 
 # 启动时确保默认 admin 用户存在（用 .env 的 ADMIN_PASSWORD 生成 bcrypt 哈希）
 ensure_default_user()
+# 多用户隔离：向量库一致性维护（幂等）——补历史块 user_id + 清孤儿向量
+try:
+    _r = kb.backfill_vector_owner()
+    if _r["fixed"] or _r["orphaned"]:
+        print(f"[startup] vector maintenance: {_r['fixed']} chunks owned, "
+              f"{_r['orphaned']} orphan doc-groups removed", file=sys.stderr)
+except Exception as e:
+    print(f"[startup] vector maintenance skipped: {e}", file=sys.stderr)

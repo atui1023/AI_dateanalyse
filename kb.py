@@ -313,6 +313,7 @@ def _do_ingest(doc_id: str) -> None:
 
         # 归属以执行时刻注册表中的 folder_id 为准（解析期间用户移动文件也能正确落位）
         folder_id = doc["folder_id"]
+        owner_id = doc.get("user_id", DEFAULT_USER_ID)
         metadatas = [
             {
                 "doc_id": doc_id,
@@ -320,6 +321,7 @@ def _do_ingest(doc_id: str) -> None:
                 "path": doc["path"],
                 "chunk": i,
                 "folder_id": folder_id,
+                "user_id": owner_id,  # 向量级归属：retrieve 强制按此过滤，防跨用户召回
             }
             for i in range(len(texts))
         ]
@@ -341,6 +343,49 @@ def _do_ingest(doc_id: str) -> None:
         print(f"ingest failed [{doc['filename']}]: {e}", file=sys.stderr)
     finally:
         _upsert_doc(doc)
+
+
+def backfill_vector_owner() -> dict:
+    """启动时向量库一致性维护（幂等）：
+    1) 为历史向量块补写 user_id metadata（多用户隔离上线前的旧数据没有该字段）；
+    2) 清理"孤儿向量"：chroma 中存在但 MySQL 注册表已无记录的 doc_id 块
+       （历史删除残留，user_id=None 永远不会被 retrieve 召回，属垃圾数据）。
+    返回 {"fixed": 补归属块数, "orphaned": 清理孤儿块数}。"""
+    fixed = 0
+    orphaned = 0
+    try:
+        with get_session() as db:
+            rows = db.query(KbDocument).all()
+            owners = {d.doc_id: d.user_id for d in rows}
+        col = get_vectordb()._collection
+        # 1) 补归属
+        for doc_id, owner_id in owners.items():
+            got = col.get(where={"doc_id": doc_id}, include=["metadatas"])
+            ids = got.get("ids") or []
+            metas = got.get("metadatas") or []
+            update_ids, update_metas = [], []
+            for cid, m in zip(ids, metas):
+                m = m or {}
+                if m.get("user_id") != owner_id:
+                    update_ids.append(cid)
+                    update_metas.append({**m, "user_id": owner_id})
+            if update_ids:
+                col.update(ids=update_ids, metadatas=update_metas)
+                fixed += len(update_ids)
+        # 2) 清孤儿：向量库里 doc_id 不在注册表中的块，整 doc 删除
+        all_got = col.get(include=["metadatas"])
+        for m in all_got.get("metadatas") or []:
+            m = m or {}
+            did = m.get("doc_id")
+            if did and did not in owners:
+                try:
+                    col.delete(where={"doc_id": did})
+                    orphaned += 1
+                except Exception as e:
+                    print(f"orphan vector delete failed [{did}]: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"backfill vector owner failed: {type(e).__name__}: {e}", file=sys.stderr)
+    return {"fixed": fixed, "orphaned": orphaned}
 
 
 def retry_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
@@ -424,28 +469,23 @@ def retrieve(query: str, k: int = TOP_K,
              user_id: int = DEFAULT_USER_ID):
     """按语义相似度召回 top-k 资料块。
 
-    folder_ids 不为空时只在这些知识库内检索（按需加载的核心：向量库保留全部数据，
-    检索时用 Chroma where 过滤，勾选即时生效）；为空表示未勾选任何知识库，回退全库检索。
+    多用户隔离（强制）：向量库是所有用户共享的 collection，每个 chunk 的 metadata
+    都带 user_id，这里始终追加 {"user_id": user_id} 过滤条件——即使用户未勾选任何
+    知识库（folder_ids/doc_ids 均为空），也只在本人文档范围内检索，绝不跨用户召回。
+
+    folder_ids 不为空时只在这些知识库内检索（按需加载：勾选即时生效）；
     doc_ids 不为空时进一步只检索这些文档（文件级勾选，与 folder_ids 取交集）。
     解析中/失败的文档没有向量块，天然不会被召回。
-
-    注：向量库本身无 user_id 概念，folder_id 已按用户隔离（由调用方传入该用户的
-    folder_ids），故此处不再额外按 user_id 过滤；保留 user_id 参数仅为接口一致性。
     """
-    filter_cond = None
-    if folder_ids and doc_ids:
-        filter_cond = {"$and": [
-            {"folder_id": {"$in": folder_ids}},
-            {"doc_id": {"$in": doc_ids}},
-        ]}
-    elif folder_ids:
-        filter_cond = {"folder_id": {"$in": folder_ids}}
-    elif doc_ids:
-        filter_cond = {"doc_id": {"$in": doc_ids}}
+    # 归属条件始终第一优先，任何检索都不能越过
+    conds = [{"user_id": {"$eq": user_id}}]
+    if folder_ids:
+        conds.append({"folder_id": {"$in": folder_ids}})
+    if doc_ids:
+        conds.append({"doc_id": {"$in": doc_ids}})
+    filter_cond = conds[0] if len(conds) == 1 else {"$and": conds}
 
-    if filter_cond:
-        return get_vectordb().similarity_search(query, k=k, filter=filter_cond)
-    return get_vectordb().similarity_search(query, k=k)
+    return get_vectordb().similarity_search(query, k=k, filter=filter_cond)
 
 
 def doc_count(user_id: int = DEFAULT_USER_ID) -> int:

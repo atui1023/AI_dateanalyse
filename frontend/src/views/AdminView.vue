@@ -169,16 +169,17 @@ function formatTime(t: string) {
 
 <style scoped>
 .admin-view {
-  padding: 20px;
-  background: #fff;
+  padding: 30px clamp(16px, 4vw, 42px);
+  background: var(--bg);
   height: 100%;
   overflow-y: auto;
 }
 .admin-header {
-  margin-bottom: 16px;
+  max-width: 1180px;
+  margin: 0 auto 20px;
 }
 .admin-header h3 {
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 600;
 }
 .create-form {
@@ -187,5 +188,13 @@ function formatTime(t: string) {
   margin-bottom: 16px;
   flex-wrap: wrap;
   align-items: center;
+  max-width: 1180px;
+  padding: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(35, 54, 50, .025);
 }
+.admin-view :deep(.el-tabs) { max-width: 1180px; margin: 0 auto; }
+.admin-view :deep(.el-tabs__content) { padding-top: 4px; }
 </style>

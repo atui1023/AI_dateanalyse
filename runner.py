@@ -7,18 +7,132 @@ manifest JSON 格式：[{"path": 数据文件路径, "ext": 扩展名}, ...]
 约定：
 - 各数据集按顺序加载为 DataFrame 变量 df1、df2、……（df 等价于 df1），pd / np 可用
 - 预装库：scipy、sklearn、statsmodels（顶层已导入，子模块可自行 import）
+- 基础库：pandas、numpy、openpyxl
 - 模型把最终表格结果赋值给 result（DataFrame）
 - 模型可赋值 chart（dict）作为 ECharts option，用于前端图表渲染
 - print() 输出的内容会被收集为文本结论
 - 执行结束后打印 ===RUNNER_OK=== + JSON 结果；出错打印 ===RUNNER_ERR=== + JSON
 """
 import contextlib
+import ast
+import builtins
 import io
 import json
 import os
 import sys
 import tempfile
 import warnings
+
+
+ALLOWED_IMPORTS = {
+    "collections", "datetime", "decimal", "functools", "itertools", "json",
+    "math", "numpy", "pandas", "scipy", "sklearn", "statistics", "statsmodels",
+}
+FORBIDDEN_NAMES = {
+    "ctypes", "ftplib", "http", "os", "pathlib", "requests", "shutil", "socket",
+    "subprocess", "sys", "urllib",
+}
+FORBIDDEN_CALLS = {
+    "breakpoint", "compile", "delattr", "dir", "eval", "exec", "exit", "getattr",
+    "globals", "help", "input", "locals", "open", "quit", "setattr", "vars",
+}
+FORBIDDEN_ATTRIBUTES = {
+    "ExcelFile", "HDFStore", "Popen", "call", "chmod", "chown", "connect", "ctypes",
+    "fork", "fromfile", "genfromtxt", "kill", "load",
+    "loadtxt", "memmap", "mkdir", "open", "popen", "read_clipboard", "read_csv",
+    "read_excel", "read_feather", "read_fwf", "read_hdf", "read_html", "read_json",
+    "read_orc", "read_parquet", "read_pickle", "read_sas", "read_spss", "read_sql",
+    "read_sql_query", "read_sql_table", "read_stata", "read_table", "read_xml", "remove", "rename",
+    "replace", "request", "rmdir", "save", "send", "spawn", "system", "touch",
+    "to_clipboard", "to_csv", "to_excel", "to_feather", "to_json", "to_parquet",
+    "to_pickle", "unlink", "urlopen", "write", "writelines", *FORBIDDEN_NAMES,
+}
+FORBIDDEN_CALL_PREFIXES = ("fetch_", "download_")
+MAX_CAPTURE_CHARS = 1_000_000
+
+
+class SandboxViolation(ValueError):
+    pass
+
+
+class LimitedStringIO(io.StringIO):
+    """Limit model output retained in memory while keeping print semantics."""
+
+    def __init__(self, limit: int = MAX_CAPTURE_CHARS):
+        super().__init__()
+        self.limit = limit
+        self.truncated = False
+
+    def write(self, value: str) -> int:
+        remaining = self.limit - self.tell()
+        if remaining <= 0:
+            self.truncated = True
+            return len(value)
+        if len(value) > remaining:
+            super().write(value[:remaining])
+            self.truncated = True
+            return len(value)
+        return super().write(value)
+
+
+def validate_analysis_code(code: str) -> None:
+    """Reject code that can escape the read-only analysis environment."""
+    try:
+        tree = ast.parse(code, filename="<analysis>", mode="exec")
+    except SyntaxError:
+        raise
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
+            for module in modules:
+                root = module.split(".", 1)[0]
+                if root not in ALLOWED_IMPORTS:
+                    raise SandboxViolation(f"不允许导入模块：{root or module}")
+        if isinstance(node, ast.Name):
+            if node.id in FORBIDDEN_NAMES or node.id.startswith("__"):
+                raise SandboxViolation(f"不允许访问名称：{node.id}")
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") or node.attr in FORBIDDEN_ATTRIBUTES:
+                raise SandboxViolation(f"不允许访问属性：{node.attr}")
+        if isinstance(node, ast.Call):
+            call_name = ""
+            if isinstance(node.func, ast.Name):
+                call_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                call_name = node.func.attr
+            if call_name in FORBIDDEN_CALLS or call_name.startswith(FORBIDDEN_CALL_PREFIXES):
+                raise SandboxViolation(f"不允许调用函数：{call_name}")
+
+
+def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = name.split(".", 1)[0]
+    if level or root not in ALLOWED_IMPORTS:
+        raise SandboxViolation(f"不允许导入模块：{name}")
+    return builtins.__import__(name, globals, locals, fromlist, level)
+
+
+def safe_builtins() -> dict:
+    allowed = {
+        "Exception", "KeyError", "RuntimeError", "TypeError", "ValueError", "ZeroDivisionError",
+        "abs", "all", "any", "bool", "dict", "enumerate", "filter", "float", "format",
+        "int", "isinstance", "len", "list", "map", "max", "min", "next", "object",
+        "pow", "print", "range", "reversed", "round", "set", "slice", "sorted", "str",
+        "sum", "tuple", "type", "zip",
+    }
+    env = {name: getattr(builtins, name) for name in allowed}
+    env["__import__"] = safe_import
+    return env
+
+
+def apply_resource_limits() -> None:
+    """Apply hard CPU/address-space limits where the platform supports resource."""
+    try:
+        import resource
+    except ImportError:
+        return
+    resource.setrlimit(resource.RLIMIT_CPU, (20, 20))
+    memory_limit = 1536 * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
 
 def _configure_utf8_stdio() -> None:
@@ -48,6 +162,7 @@ import numpy as np
 import pandas as pd
 
 # 预导入常用数据分析/机器学习库到沙箱顶层，模型也可自行 import 子模块
+# 这些依赖由 requirements.txt 固定，缺失时保留兼容值，启动阶段不会静默崩溃
 try:
     import scipy
 except ImportError:
@@ -91,21 +206,26 @@ def main():
 
 
 def _main():
+    apply_resource_limits()
     code_path = sys.argv[1]
     manifest = json.loads(sys.argv[2])
 
     # 1. 按顺序加载所有数据集：df1、df2、……
-    env = {"pd": pd, "np": np, "scipy": scipy, "sklearn": sklearn, "statsmodels": statsmodels}
+    env = {"pd": pd, "np": np, "scipy": scipy, "sklearn": sklearn, "statsmodels": statsmodels,
+           "__name__": "__analysis__"}
     for i, item in enumerate(manifest, start=1):
         env[f"df{i}"] = load_dataframe(item["path"], item["ext"])
     if manifest:
         env["df"] = env["df1"]  # 单文件场景下的便捷别名
-
+    # 使用同一个字典作为 globals 和 locals。否则模型代码在函数、lambda 或
+    # 推导式中引用 df1/df2 时，只会从 globals 查找，导致 NameError。
+    env["__builtins__"] = safe_builtins()
     # 2. 读取并执行模型生成的代码
     with open(code_path, "r", encoding="utf-8") as f:
         code = f.read()
+    validate_analysis_code(code)
 
-    buf = io.StringIO()
+    buf = LimitedStringIO()
     # 用 fd 级重定向彻底拦截模型代码对真实 stdout/stderr 的写入（包括 os.write、
     # sys.__stdout__.write()、C 扩展库的 printf/fprintf 等），避免污染 runner 的标记输出。
     real_stdout_fd = os.dup(1)
@@ -119,7 +239,7 @@ def _main():
             os.dup2(tmp_f.fileno(), 2)  # stderr 也重定向，拦截 C 库 fprintf 等
         try:
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-                exec(compile(code, "<analysis>", "exec"), {"__builtins__": __builtins__}, env)
+                exec(compile(code, "<analysis>", "exec"), env, env)
         except BaseException as e:
             # 模型代码可能写了 sys.exit()/exit()/quit()，触发 SystemExit（继承自 BaseException
             # 而非 Exception）。若不在此拦截，SystemExit 会穿透 main() 的 except Exception，
@@ -141,7 +261,9 @@ def _main():
         os.remove(tmp_path)
     except OSError:
         pass
-    combined = buf.getvalue() + fd_output
+    combined = buf.getvalue() + fd_output[:MAX_CAPTURE_CHARS]
+    if buf.truncated or len(fd_output) > MAX_CAPTURE_CHARS:
+        combined += "\n[输出过长，已截断]"
 
     if exec_error is not None:
         print("===RUNNER_ERR===")

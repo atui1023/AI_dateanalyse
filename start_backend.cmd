@@ -9,4 +9,9 @@ for /f "tokens=5" %%P in ('netstat -ano -p tcp ^| findstr /R /C:"127.0.0.1:8000 
 
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUTF8=1"
+call npm --prefix frontend run build > frontend-build.log 2>&1
+if errorlevel 1 (
+  echo Frontend build failed. See frontend-build.log.
+  exit /b 1
+)
 ".venv\Scripts\python.exe" -m uvicorn main:app --host 127.0.0.1 --port 8000 > server.log 2>&1

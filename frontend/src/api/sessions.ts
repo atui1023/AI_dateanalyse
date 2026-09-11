@@ -13,9 +13,14 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   result?: {
+    result_id?: number | null
     stdout?: string | null
     table?: { columns: string[]; rows: any[][]; truncated?: boolean } | null
     chart?: Record<string, any> | null
+    datasets?: { dataset_id?: string; filename?: string; rows?: number; cols?: number; columns?: string[] }[] | null
+    conclusion?: string | null
+    execution_ms?: number | null
+    created_at?: string | null
     error?: string | null
   } | null
 }

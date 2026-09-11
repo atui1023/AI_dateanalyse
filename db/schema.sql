@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     chunks          INT          DEFAULT 0 COMMENT '切分块数',
     error_msg       TEXT         DEFAULT NULL COMMENT '解析失败原因',
     is_active       TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '是否参与检索',
+    is_favorite     TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否收藏',
+    tags_json       JSON         DEFAULT (JSON_ARRAY()) COMMENT '标签列表',
+    version         INT          NOT NULL DEFAULT 1 COMMENT '文件版本号',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_folder (user_id, folder_id),
@@ -51,6 +54,21 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     CONSTRAINT fk_doc_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_doc_folder FOREIGN KEY (folder_id) REFERENCES kb_folders(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库文档';
+
+-- ---------- 3.1 知识库文档历史版本表 ----------
+CREATE TABLE IF NOT EXISTS kb_document_versions (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    doc_id          VARCHAR(32)  NOT NULL,
+    user_id         BIGINT       NOT NULL,
+    version         INT          NOT NULL,
+    filename        VARCHAR(255) NOT NULL,
+    file_path       VARCHAR(512) NOT NULL,
+    file_ext        VARCHAR(16)  DEFAULT NULL,
+    file_size       BIGINT       DEFAULT 0,
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_doc_version (doc_id, version),
+    CONSTRAINT fk_doc_version_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库文档历史版本';
 
 -- ---------- 4. 数据集(分析用表格)表 ----------
 CREATE TABLE IF NOT EXISTS datasets (
@@ -101,6 +119,9 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     stdout          MEDIUMTEXT   DEFAULT NULL COMMENT '执行标准输出',
     table_json      MEDIUMTEXT   DEFAULT NULL COMMENT '结果表格(JSON)',
     chart_json      MEDIUMTEXT   DEFAULT NULL COMMENT '图表配置(JSON)',
+    dataset_json    MEDIUMTEXT   DEFAULT NULL COMMENT '本次分析使用的数据集快照(JSON)',
+    conclusion      MEDIUMTEXT   DEFAULT NULL COMMENT '结构化分析结论',
+    execution_ms    INT          DEFAULT NULL COMMENT '代码执行耗时(毫秒)',
     error_msg       TEXT         DEFAULT NULL COMMENT '执行错误信息',
     status          VARCHAR(16)  NOT NULL DEFAULT 'running' COMMENT '状态: running/success/failed',
     created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -108,7 +129,75 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     INDEX idx_session (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='分析结果记录';
 
--- ---------- 8. 操作审计日志表 ----------
+
+-- ---------- 8. 分析关联配置表 ----------
+CREATE TABLE IF NOT EXISTS analysis_relations (
+    id VARCHAR(32) PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
+    dataset_ids_json MEDIUMTEXT NOT NULL, joins_json MEDIUMTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_relation_user (user_id),
+    CONSTRAINT fk_relation_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='多数据集关联配置';
+
+-- ---------- 9. 仪表盘表 ----------
+CREATE TABLE IF NOT EXISTS dashboards (
+    id VARCHAR(32) PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
+    description TEXT DEFAULT NULL, layout_json MEDIUMTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_dashboard_user (user_id),
+    CONSTRAINT fk_dashboard_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='分析仪表盘';
+
+CREATE TABLE IF NOT EXISTS dashboard_items (
+    id VARCHAR(32) PRIMARY KEY, dashboard_id VARCHAR(32) NOT NULL, result_id BIGINT NOT NULL,
+    title VARCHAR(128) NOT NULL, chart_config_json MEDIUMTEXT NOT NULL, position_json MEDIUMTEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_dashboard_item (dashboard_id),
+    CONSTRAINT fk_dashboard_item_board FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='仪表盘项目';
+
+-- ---------- 10. 分享与评论表 ----------
+CREATE TABLE IF NOT EXISTS analysis_shares (
+    token VARCHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL, result_id BIGINT DEFAULT NULL,
+    dashboard_id VARCHAR(32) DEFAULT NULL, allow_comments TINYINT(1) NOT NULL DEFAULT 1,
+    expires_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_share_user (user_id),
+    CONSTRAINT fk_share_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='分析结果分享';
+
+CREATE TABLE IF NOT EXISTS analysis_comments (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY, token VARCHAR(64) NOT NULL, user_id BIGINT DEFAULT NULL,
+    author_name VARCHAR(64) NOT NULL DEFAULT '访客', content TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_comment_token (token),
+    CONSTRAINT fk_comment_share FOREIGN KEY (token) REFERENCES analysis_shares(token) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='分享评论';
+
+-- ---------- 11. 定时任务与模拟发送记录 ----------
+CREATE TABLE IF NOT EXISTS schedule_jobs (
+    id VARCHAR(32) PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
+    job_type VARCHAR(32) NOT NULL DEFAULT 'analysis', schedule_text VARCHAR(64) NOT NULL,
+    dataset_ids_json MEDIUMTEXT NOT NULL, question TEXT DEFAULT NULL, source_path VARCHAR(512) DEFAULT NULL,
+    recipients_json MEDIUMTEXT NOT NULL, enabled TINYINT(1) NOT NULL DEFAULT 1,
+    last_run_at DATETIME DEFAULT NULL, next_run_at DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_schedule_user (user_id), INDEX idx_schedule_due (enabled, next_run_at),
+    CONSTRAINT fk_schedule_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时分析和上传任务';
+
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY, job_id VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'success', simulated_email TINYINT(1) NOT NULL DEFAULT 1,
+    output_json MEDIUMTEXT DEFAULT NULL, error_msg TEXT DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_schedule_run (job_id, created_at),
+    CONSTRAINT fk_schedule_run_job FOREIGN KEY (job_id) REFERENCES schedule_jobs(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时任务执行记录';
+
+-- ---------- 12. 操作审计日志表 ----------
 CREATE TABLE IF NOT EXISTS audit_logs (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id         BIGINT       DEFAULT NULL COMMENT '操作用户',

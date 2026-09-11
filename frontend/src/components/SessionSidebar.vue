@@ -7,6 +7,7 @@ import {
 } from 'lucide-vue-next'
 
 const store = useSessionsStore()
+const props = defineProps<{ width?: number }>()
 
 onMounted(() => {
   store.fetchList()
@@ -57,7 +58,7 @@ function formatTime(t: string) {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <aside class="sidebar" :style="{ width: (props.width || 240) + 'px' }">
     <div class="sidebar-head">
       <span class="title">会话列表</span>
       <el-button type="primary" size="small" @click="handleNew">
@@ -109,8 +110,10 @@ function formatTime(t: string) {
 <style scoped>
 .sidebar {
   width: 240px;
+  min-width: 180px;
+  max-width: 420px;
   flex-shrink: 0;
-  background: #fff;
+  background: #fbfcfc;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -119,23 +122,26 @@ function formatTime(t: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px;
+  min-height: 58px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
 }
 .sidebar-head .title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
+  text-transform: uppercase;
 }
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
-  padding: 6px;
+  padding: 8px;
 }
 .session-item {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 48px;
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -146,6 +152,7 @@ function formatTime(t: string) {
 }
 .session-item.active {
   background: var(--primary-light);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 .session-item.active .session-title {
   color: var(--primary);
@@ -174,6 +181,12 @@ function formatTime(t: string) {
 .session-actions {
   display: none;
   gap: 4px;
+}
+.session-actions .el-button {
+  width: 26px;
+  height: 26px;
+  border-color: transparent;
+  background: rgba(255, 255, 255, .72);
 }
 .session-item:hover .session-actions {
   display: flex;

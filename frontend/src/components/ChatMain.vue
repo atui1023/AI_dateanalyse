@@ -6,7 +6,7 @@ import { streamChat, AuthError } from '@/api/chat'
 import { notifyUnauthorized } from '@/api/request'
 import ChatMessage from './ChatMessage.vue'
 import { ElMessage } from 'element-plus'
-import { Send } from 'lucide-vue-next'
+import { Send, ClipboardList } from 'lucide-vue-next'
 
 const sessions = useSessionsStore()
 const kb = useKbStore()
@@ -24,6 +24,20 @@ interface StreamMessage {
   streaming?: boolean
 }
 const streamMessages = ref<StreamMessage[]>([])
+
+const analysisTemplates = [
+  { key: 'trend', label: '趋势分析', prompt: '请按时间字段分析核心指标的趋势，给出总体变化、关键拐点，并绘制折线图。' },
+  { key: 'ranking', label: '排名分析', prompt: '请按核心指标对对象进行排名，展示前 10 名，并说明排名靠前对象的主要原因。' },
+  { key: 'yoy', label: '同比环比', prompt: '请按时间字段计算核心指标的同比和环比变化，指出增长最快和下降最明显的期间。' },
+  { key: 'customer', label: '客户贡献', prompt: '请分析各客户的销售额和贡献度，计算累计贡献占比，并识别重点客户。' },
+  { key: 'inventory', label: '库存周转', prompt: '请分析库存周转情况，计算各商品或类别的周转率，识别周转过慢和库存风险。' },
+  { key: 'outlier', label: '异常检测', prompt: '请检测数据中的异常值和异常期间，说明异常记录、异常程度以及可能原因。' },
+]
+
+function applyAnalysisTemplate(prompt: string) {
+  mode.value = 'analysis'
+  input.value = prompt
+}
 
 const mountList = computed(() => kb.mounts)
 
@@ -144,7 +158,7 @@ async function handleSend() {
     selfPush = true
     sessions.messages.push(
       { role: 'user', content: text },
-      { role: 'assistant', content: am().text },
+      { role: 'assistant', content: am().text, result: am().result ?? null },
     )
     // 刷新会话列表（标题/时间会更新）
     sessions.fetchList()
@@ -198,7 +212,18 @@ function handleKeydown(e: KeyboardEvent) {
           <el-radio-button label="analysis">数据分析</el-radio-button>
           <el-radio-button label="rag">知识库</el-radio-button>
         </el-radio-group>
-        <div v-if="mode === 'analysis' && mountList.length" class="mount-list">
+        <el-dropdown v-if="mode === 'analysis'" trigger="click" @command="applyAnalysisTemplate">
+          <el-button size="small" plain>
+            <el-icon><ClipboardList /></el-icon> 分析模板
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="item in analysisTemplates" :key="item.key" :command="item.prompt">
+                {{ item.label }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>        <div v-if="mode === 'analysis' && mountList.length" class="mount-list">
           <el-tag v-for="(m, i) in mountList" :key="m.doc_id" size="small" closable @close="kb.unmountDocument(m.doc_id)">
             df{{ i + 1 }}: {{ m.filename }}
           </el-tag>
@@ -228,23 +253,30 @@ function handleKeydown(e: KeyboardEvent) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
+  min-width: 0;
+  background: #f7f9f8;
 }
 .msg-stream {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 26px clamp(18px, 4vw, 54px);
+  scroll-behavior: smooth;
 }
 .tip {
+  width: min(420px, 100%);
+  margin: 80px auto 0;
+  padding: 24px;
   text-align: center;
   color: var(--text-tertiary);
-  margin-top: 40px;
   font-size: 14px;
+  border: 1px dashed #cedbd8;
+  border-radius: 8px;
+  background: rgba(255,255,255,.6);
 }
 .input-area {
   flex-shrink: 0;
-  padding: 12px 16px;
-  background: #fff;
+  padding: 12px clamp(16px, 3vw, 36px) 16px;
+  background: rgba(255,255,255,.96);
   border-top: 1px solid var(--border);
 }
 .input-meta {
@@ -252,6 +284,7 @@ function handleKeydown(e: KeyboardEvent) {
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 .mount-list {
   display: flex;
@@ -262,5 +295,26 @@ function handleKeydown(e: KeyboardEvent) {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.input-row:focus-within {
+  border-color: #9bb9b4;
+  box-shadow: 0 0 0 3px rgba(63,118,111,.08);
+}
+.input-row :deep(.el-textarea__inner) {
+  min-height: 38px !important;
+  border: 0;
+  box-shadow: none;
+  resize: none;
+}
+.input-row > .el-button { width: 40px; height: 38px; padding: 0; }
+.input-meta :deep(.el-radio-button__inner) { min-width: 72px; }
+@media (max-width: 640px) {
+  .msg-stream { padding: 18px 12px; }
+  .input-area { padding: 10px; }
 }
 </style>

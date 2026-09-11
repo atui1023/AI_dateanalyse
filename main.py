@@ -3,11 +3,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
 import pandas as pd
+import psutil
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,8 +25,10 @@ import llm
 from auth import get_current_user
 # 审计日志通过 auth.log_action 调用（用模块前缀更清晰，避免和本地变量混淆）
 from db import (
-    AnalysisResult, Base, ChatMessage, Session as DbSession, User, engine,
-    ensure_default_user, get_session,
+    AnalysisComment, AnalysisRelation, AnalysisResult, AnalysisShare, Base,
+    ChatMessage, Dashboard, DashboardItem, ScheduleJob, ScheduleRun,
+    Session as DbSession, User, engine,
+    ensure_compat_schema, ensure_default_user, get_session,
 )
 
 app = FastAPI(title="AI 数据分析")
@@ -65,7 +71,13 @@ app.include_router(auth.router)
 BASE_DIR = os.path.dirname(__file__)
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 KB_DIR = os.path.join(UPLOAD_DIR, "kb")
+FRONTEND_DIST_DIR = os.path.join(BASE_DIR, "frontend", "dist")
 os.makedirs(KB_DIR, exist_ok=True)
+
+# 生产/桌面启动统一托管 Vue 构建产物，避免误加载历史遗留的 static/index.html。
+if os.path.isdir(os.path.join(FRONTEND_DIST_DIR, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST_DIR, "assets")), name="frontend-assets")
+    app.mount("/favicon.svg", StaticFiles(directory=FRONTEND_DIST_DIR), name="frontend-favicon")
 
 # 内存中保存已挂载数据集的信息，按用户严格隔离：
 #   user_id -> { doc_id -> {path, ext, filename, summary, doc_id} }
@@ -142,12 +154,53 @@ def build_summary(df: pd.DataFrame) -> dict:
             "samples": samples,
         })
     preview = df.head(5).fillna("").astype(str).values.tolist()
+    missing_by_column = {
+        str(col): int(df[col].isna().sum())
+        for col in df.columns
+        if int(df[col].isna().sum()) > 0
+    }
+    duplicate_rows = int(df.duplicated().sum())
+    empty_rows = int(df.isna().all(axis=1).sum()) if len(df.columns) else int(len(df))
+    quality_issues = []
+    if missing_by_column:
+        quality_issues.append({
+            "level": "warning",
+            "code": "missing_values",
+            "message": f"{len(missing_by_column)} 个字段存在缺失值，共 {sum(missing_by_column.values())} 个",
+        })
+    if duplicate_rows:
+        quality_issues.append({
+            "level": "warning",
+            "code": "duplicate_rows",
+            "message": f"发现 {duplicate_rows} 行重复数据",
+        })
+    if empty_rows:
+        quality_issues.append({
+            "level": "warning",
+            "code": "empty_rows",
+            "message": f"发现 {empty_rows} 行完全为空的数据",
+        })
+    duplicated_columns = [str(c) for c in df.columns[df.columns.duplicated()].tolist()]
+    if duplicated_columns:
+        quality_issues.append({
+            "level": "error",
+            "code": "duplicate_columns",
+            "message": f"字段名重复：{'、'.join(duplicated_columns)}",
+        })
     return {
         "rows": int(df.shape[0]),
         "cols": int(df.shape[1]),
         "columns": columns,
         "preview_columns": [str(c) for c in df.columns],
         "preview_rows": preview,
+        "quality": {
+            "missing_cells": int(df.isna().sum().sum()),
+            "missing_rate": round(float(df.isna().sum().sum()) / max(df.size, 1), 4),
+            "duplicate_rows": duplicate_rows,
+            "empty_rows": empty_rows,
+            "missing_by_column": missing_by_column,
+            "issues": quality_issues,
+        },
     }
 
 
@@ -268,10 +321,19 @@ async def kb_upload(request: Request, file: UploadFile = File(...), folder_id: s
     with open(save_path, "wb") as f:
         f.write(content)
 
+    summary = None
+    if ext in ALLOWED_EXT:
+        try:
+            summary = build_summary(load_dataframe(save_path, ext))
+        except Exception as e:
+            if os.path.exists(save_path):
+                os.remove(save_path)
+            raise HTTPException(status_code=400, detail=f"文件解析失败：{e}")
+
     doc = kb.register_document(save_path, ext, filename, folder_id=folder_id, user_id=user.id)
     auth.log_action(user.id, "upload_doc", "document", doc["doc_id"],
                     detail=f"upload {filename} ({ext})", ip=auth._client_ip(request))
-    return {"doc_id": doc["doc_id"], "filename": doc["filename"], "status": doc["status"]}
+    return {"doc_id": doc["doc_id"], "filename": doc["filename"], "status": doc["status"], "summary": summary}
 
 
 @app.get("/kb/documents")
@@ -297,6 +359,54 @@ def kb_delete(doc_id: str, request: Request, user: User = Depends(get_current_us
                     detail=f"delete {rec.get('filename', '') if rec else ''}",
                     ip=auth._client_ip(request))
     return {"ok": True}
+
+
+@app.post("/kb/documents/{doc_id}/version")
+async def kb_upload_version(doc_id: str, request: Request, file: UploadFile = File(...), user: User = Depends(get_current_user)):
+    """上传文档新版本，保留旧版本并重新解析向量。"""
+    filename = os.path.basename(file.filename or "未命名文档")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in kb.KB_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="仅支持 TXT / MD / PDF / CSV / Excel 文档")
+    content = await file.read()
+    if len(content) > kb.MAX_KB_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="文档大小不能超过 20MB")
+    save_path = os.path.join(KB_DIR, f"{uuid.uuid4().hex}{ext}")
+    with open(save_path, "wb") as f:
+        f.write(content)
+    try:
+        doc = kb.replace_document(doc_id, save_path, ext, filename, len(content), user_id=user.id)
+    except ValueError as e:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        raise HTTPException(status_code=400, detail=f"上传新版本失败：{e}")
+    mounted = user_datasets(user.id).get(doc_id)
+    if mounted and ext in ALLOWED_EXT:
+        try:
+            summary = build_summary(load_dataframe(save_path, ext))
+            mounted.update({"path": save_path, "ext": ext, "filename": filename, "summary": summary})
+        except Exception:
+            pass
+    elif mounted:
+        # 版本替换为文档类文件后，原来的 df 挂载已经失效，必须同步卸载。
+        unmount_dataset(user.id, doc_id)
+    auth.log_action(user.id, "upload_doc_version", "document", doc_id,
+                    detail=f"upload version {doc.get('version')}: {filename}",
+                    ip=auth._client_ip(request))
+    return {"doc_id": doc_id, "filename": filename, "version": doc.get("version"), "status": doc.get("status")}
+
+
+@app.get("/kb/documents/{doc_id}/versions")
+def kb_document_versions(doc_id: str, user: User = Depends(get_current_user)):
+    try:
+        kb.get_document(doc_id, user_id=user.id)
+        return kb.list_document_versions(doc_id, user_id=user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/kb/documents/{doc_id}/retry")
@@ -362,6 +472,20 @@ def kb_doc_move(doc_id: str, payload: dict, user: User = Depends(get_current_use
     return {"ok": True}
 
 
+@app.patch("/kb/documents/{doc_id}/metadata")
+def kb_doc_metadata(doc_id: str, payload: dict, user: User = Depends(get_current_user)):
+    """更新文档元数据：{"tags": ["销售"], "favorite": true}"""
+    tags = payload.get("tags")
+    if tags is not None and not isinstance(tags, list):
+        raise HTTPException(status_code=400, detail="tags 必须是数组")
+    try:
+        return kb.update_doc_metadata(
+            doc_id, tags=tags, favorite=payload.get("favorite"), user_id=user.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @app.patch("/kb/documents/{doc_id}/active")
 def kb_doc_active(doc_id: str, payload: dict, user: User = Depends(get_current_user)):
     """切换单个文档是否参与检索：{"active": true|false}"""
@@ -378,7 +502,7 @@ def extract_code(reply: str) -> Optional[str]:
 
 
 def run_analysis(active_datasets: List[dict], code: str) -> dict:
-    """在独立子进程中执行模型生成的 pandas 代码，30 秒超时。
+    """在受监控的独立子进程中执行模型生成的 pandas 代码。
 
     active_datasets 按顺序对应代码环境中的 df1、df2……
     """
@@ -391,23 +515,74 @@ def run_analysis(active_datasets: List[dict], code: str) -> dict:
         ensure_ascii=False,
     )
 
+    timeout_seconds = int(os.getenv("ANALYSIS_TIMEOUT_SECONDS", "30"))
+    memory_limit = int(os.getenv("ANALYSIS_MEMORY_LIMIT_MB", "1536")) * 1024 * 1024
+    proc = None
+    limit_error = None
+    output = ""
+    process_stderr = ""
+    stdout_path = ""
+    stderr_path = ""
     try:
-        proc = subprocess.run(
-            [sys.executable, os.path.join(BASE_DIR, "runner.py"), code_path, manifest],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        return {"error": "代码执行超时（超过 30 秒），请简化分析逻辑后重试"}
+        with tempfile.TemporaryDirectory(prefix="analysis_runner_") as temp_dir:
+            stdout_path = os.path.join(temp_dir, "stdout.log")
+            stderr_path = os.path.join(temp_dir, "stderr.log")
+            with open(stdout_path, "w", encoding="utf-8") as stdout_file, \
+                    open(stderr_path, "w", encoding="utf-8") as stderr_file:
+                proc = subprocess.Popen(
+                    [sys.executable, os.path.join(BASE_DIR, "runner.py"), code_path, manifest],
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+                    creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+                )
+                monitored = psutil.Process(proc.pid)
+                started_at = time.monotonic()
+                while proc.poll() is None:
+                    if time.monotonic() - started_at > timeout_seconds:
+                        limit_error = f"代码执行超时（超过 {timeout_seconds} 秒），请简化分析逻辑后重试"
+                        break
+                    try:
+                        processes = [monitored, *monitored.children(recursive=True)]
+                        memory_used = sum(item.memory_info().rss for item in processes if item.is_running())
+                        if memory_used > memory_limit:
+                            limit_error = f"代码执行内存超限（超过 {memory_limit // 1024 // 1024} MB）"
+                            break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                    time.sleep(0.08)
+                if limit_error:
+                    try:
+                        descendants = monitored.children(recursive=True)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        descendants = []
+                    for item in descendants:
+                        try:
+                            item.kill()
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                    try:
+                        monitored.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                    proc.wait(timeout=3)
+            with open(stdout_path, "r", encoding="utf-8", errors="replace") as output_file:
+                output = output_file.read()
+            with open(stderr_path, "r", encoding="utf-8", errors="replace") as error_file:
+                process_stderr = error_file.read()
+    except OSError as exc:
+        return {"error": f"代码执行进程启动失败：{exc}"}
     finally:
         if os.path.exists(code_path):
             os.remove(code_path)
 
-    output = proc.stdout or ""
+    if limit_error:
+        return {"error": limit_error}
+    if proc is None:
+        return {"error": "代码执行进程启动失败"}
     marker_ok = "===RUNNER_OK==="
     marker_err = "===RUNNER_ERR==="
 
@@ -433,11 +608,69 @@ def run_analysis(active_datasets: List[dict], code: str) -> dict:
     if err_data is not None:
         return {"error": f"代码执行出错：{err_data.get('error', '未知错误')}", "stdout": err_data.get("stdout", "")}
     # 兜底：runner 未输出任何标记（进程异常退出），把返回码和输出片段一并返回便于定位
-    err_tail = (proc.stderr or "").strip()
+    err_tail = process_stderr.strip()
     out_tail = output.strip()[-200:]
     detail = err_tail or out_tail or "进程无任何输出"
     return {"error": f"代码执行失败（退出码 {proc.returncode}）：{detail[:300]}"}
 
+
+
+def run_analysis_with_retries(active_datasets: List[dict], question: str, code: str) -> dict:
+    """Execute analysis code and ask the model to repair it at most twice."""
+    current_code = code
+    last_result: dict = {"error": "代码执行失败"}
+    for attempt in range(3):
+        result = run_analysis(active_datasets, current_code)
+        if not result.get("error"):
+            return {**result, "retry_count": attempt, "code": current_code}
+        last_result = result
+        if attempt >= 2:
+            break
+        try:
+            repaired = llm.repair_analysis_code(question, current_code, result["error"])
+        except llm.ModelConnectionError:
+            break
+        if not repaired or repaired == current_code:
+            break
+        current_code = repaired
+    return {**last_result, "retry_count": min(2, attempt), "code": current_code}
+
+
+def dataset_snapshot(active_datasets: List[dict]) -> list:
+    """保存本次分析实际使用的数据集元数据，避免文件后续变化导致记录失真。"""
+    return [
+        {
+            "dataset_id": ds.get("doc_id"),
+            "filename": ds.get("filename"),
+            "rows": ds.get("summary", {}).get("rows", 0),
+            "cols": ds.get("summary", {}).get("cols", 0),
+            "columns": ds.get("summary", {}).get("preview_columns", []),
+        }
+        for ds in active_datasets
+    ]
+
+
+def save_analysis_result(user_id: int, session_id: str, question: str, payload: dict) -> int:
+    """在分析执行完成后立即保存，避免客户端中断流式响应导致记录丢失。"""
+    with get_session() as db:
+        row = AnalysisResult(
+            user_id=user_id,
+            session_id=session_id,
+            question=question,
+            code=payload.get("code"),
+            stdout=payload.get("stdout"),
+            table_json=(json.dumps(payload["table"], ensure_ascii=False) if payload.get("table") else None),
+            chart_json=(json.dumps(payload["chart"], ensure_ascii=False) if payload.get("chart") else None),
+            dataset_json=json.dumps(payload.get("datasets", []), ensure_ascii=False),
+            conclusion=payload.get("stdout") or None,
+            execution_ms=payload.get("execution_ms"),
+            error_msg=payload.get("error"),
+            status="error" if payload.get("error") else "ok",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
 
 def sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -532,11 +765,27 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
                 # 数据分析场景：提取代码并执行，把结果回传前端
                 code = extract_code(full_reply)
                 if code:
-                    result = run_analysis(active, code)
-                    analysis_payload = {"code": code, **result}
-                    yield sse({"type": "result", **result})
+                    started_at = time.perf_counter()
+                    result = run_analysis_with_retries(active, question, code)
+                    execution_ms = int((time.perf_counter() - started_at) * 1000)
+                    analysis_payload = {
+                        "code": result.pop("code", None) or code,
+                        "execution_ms": execution_ms,
+                        "datasets": dataset_snapshot(active),
+                        **result,
+                    }
+                    result_id = save_analysis_result(_uid, _sid, question, analysis_payload)
+                    analysis_payload["result_id"] = result_id
+                    yield sse({"type": "result", "result_id": result_id, **result})
                 else:
-                    yield sse({"type": "result", "error": "模型没有生成可执行的分析代码，请换个问法试试"})
+                    analysis_payload = {
+                        "code": None,
+                        "execution_ms": 0,
+                        "datasets": dataset_snapshot(active),
+                        "error": "模型没有生成可执行的分析代码，请换个问法试试",
+                    }
+                    result_id = save_analysis_result(_uid, _sid, question, analysis_payload)
+                    yield sse({"type": "result", "result_id": result_id, "error": analysis_payload["error"]})
 
             # 把新建的 session_id 回传给前端（首次对话时前端要保存）
             if not req.session_id:
@@ -561,25 +810,543 @@ def chat(req: ChatRequest, user: User = Depends(get_current_user)):
                         sess = db.get(DbSession, _sid)
                         if sess:
                             sess.updated_at = datetime.now()
-                        # 分析结果单独存表
-                        if analysis_payload and _mode != "rag" and active:
-                            db.add(AnalysisResult(
-                                user_id=_uid, session_id=_sid,
-                                question=question,
-                                code=analysis_payload.get("code"),
-                                stdout=analysis_payload.get("stdout"),
-                                table_json=(json.dumps(analysis_payload["table"], ensure_ascii=False)
-                                            if analysis_payload.get("table") else None),
-                                chart_json=(json.dumps(analysis_payload["chart"], ensure_ascii=False)
-                                            if analysis_payload.get("chart") else None),
-                                error_msg=analysis_payload.get("error"),
-                                status="error" if analysis_payload.get("error") else "ok",
-                            ))
                         db.commit()
                 except Exception as e:
                     print("chat persist failed:", type(e).__name__, e, file=sys.stderr)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+
+
+# ---------------- 工作台：关联分析、仪表盘、分享协作、定时任务 ----------------
+def _json_value(raw, default):
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+def _result_view(row: AnalysisResult) -> dict:
+    return {
+        "id": row.id,
+        "question": row.question,
+        "status": row.status,
+        "stdout": row.stdout,
+        "table": _json_value(row.table_json, None),
+        "chart": _json_value(row.chart_json, None),
+        "datasets": _json_value(row.dataset_json, []),
+        "execution_ms": row.execution_ms,
+        "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
+    }
+
+
+def _owned_result(db, result_id: int, user: User) -> AnalysisResult:
+    row = db.query(AnalysisResult).filter(
+        AnalysisResult.id == result_id, AnalysisResult.user_id == user.id
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="分析结果不存在或无权访问")
+    return row
+
+
+def _table_from_df(frame: pd.DataFrame) -> dict:
+    safe = frame.head(200).copy().where(pd.notna(frame), "")
+    return {
+        "columns": [str(c) for c in safe.columns],
+        "rows": safe.astype(object).values.tolist(),
+        "truncated": len(frame.index) > 200,
+    }
+
+
+@app.get("/analysis/results")
+def analysis_results(limit: int = 50, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        rows = (db.query(AnalysisResult)
+                .filter(AnalysisResult.user_id == user.id)
+                .order_by(AnalysisResult.created_at.desc())
+                .limit(max(1, min(limit, 200))).all())
+        return [_result_view(row) for row in rows]
+
+
+@app.get("/analysis/relations")
+def list_analysis_relations(user: User = Depends(get_current_user)):
+    with get_session() as db:
+        rows = db.query(AnalysisRelation).filter(
+            AnalysisRelation.user_id == user.id
+        ).order_by(AnalysisRelation.updated_at.desc()).all()
+        return [{
+            "id": row.id, "name": row.name,
+            "dataset_ids": _json_value(row.dataset_ids_json, []),
+            "joins": _json_value(row.joins_json, []),
+            "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else "",
+        } for row in rows]
+
+
+@app.post("/analysis/relations")
+def create_analysis_relation(payload: dict, user: User = Depends(get_current_user)):
+    name = str(payload.get("name") or "未命名关联").strip()[:128]
+    dataset_ids = payload.get("dataset_ids") or []
+    joins = payload.get("joins") or []
+    if not isinstance(dataset_ids, list) or len(dataset_ids) < 2:
+        raise HTTPException(status_code=400, detail="至少选择两个数据集")
+    if not isinstance(joins, list) or len(joins) < 1:
+        raise HTTPException(status_code=400, detail="请配置至少一个关联条件")
+    for join in joins:
+        if not all(join.get(key) for key in ("left_dataset_id", "right_dataset_id", "left_key", "right_key")):
+            raise HTTPException(status_code=400, detail="关联条件不完整")
+    row = AnalysisRelation(
+        id=uuid.uuid4().hex, user_id=user.id, name=name,
+        dataset_ids_json=json.dumps(dataset_ids, ensure_ascii=False),
+        joins_json=json.dumps(joins, ensure_ascii=False),
+    )
+    with get_session() as db:
+        db.add(row)
+        db.commit()
+    return {"id": row.id, "name": row.name, "dataset_ids": dataset_ids, "joins": joins}
+
+
+@app.delete("/analysis/relations/{relation_id}")
+def delete_analysis_relation(relation_id: str, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        row = db.query(AnalysisRelation).filter(
+            AnalysisRelation.id == relation_id, AnalysisRelation.user_id == user.id
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="关联配置不存在")
+        db.delete(row)
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/analysis/relations/{relation_id}/execute")
+def execute_analysis_relation(relation_id: str, payload: dict, user: User = Depends(get_current_user)):
+    """执行关联并落地为新的可读取 CSV 数据集，同时按用户指令生成分析结果。"""
+    instruction = str(payload.get("instruction") or "").strip()
+    with get_session() as db:
+        relation = db.query(AnalysisRelation).filter(AnalysisRelation.id == relation_id, AnalysisRelation.user_id == user.id).first()
+        if relation is None:
+            raise HTTPException(status_code=404, detail="关联配置不存在")
+        dataset_ids = _json_value(relation.dataset_ids_json, [])
+        joins = _json_value(relation.joins_json, [])
+    frames = {}
+    try:
+        for doc_id in dataset_ids:
+            doc = kb.get_document(doc_id, user_id=user.id)
+            if doc.get("ext") not in ALLOWED_EXT:
+                raise ValueError(f"{doc.get('filename')} 不是可关联的表格文件")
+            frames[doc_id] = load_dataframe(doc["path"], doc["ext"])
+        merged = frames[dataset_ids[0]]
+        for join in joins:
+            merged = merged.merge(frames[join["right_dataset_id"]], left_on=join["left_key"], right_on=join["right_key"],
+                                  how=join.get("how", "left"), suffixes=("", "_关联"))
+    except (ValueError, KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=f"关联执行失败：{exc}")
+    output_path = os.path.join(KB_DIR, f"关联结果_{uuid.uuid4().hex}.csv")
+    merged.to_csv(output_path, index=False, encoding="utf-8-sig")
+    doc = kb.register_document(output_path, ".csv", f"{relation.name}_关联结果.csv", user_id=user.id)
+    summary = build_summary(merged)
+    result_id = None
+    result = {"table": _table_from_df(merged), "chart": None, "stdout": "关联结果文件已生成，可继续在数据分析或仪表盘中读取。", "error": None}
+    if instruction:
+        mount = {"doc_id": doc["doc_id"], "path": output_path, "ext": ".csv", "filename": doc["filename"], "summary": summary}
+        try:
+            response = llm.chat_model.invoke([{"role": "system", "content": llm.build_system_prompt(dataset_summary_text(1, mount))}, {"role": "user", "content": instruction}])
+            generated = response.content if hasattr(response, "content") else str(response)
+            code = extract_code(generated)
+            if code:
+                executed = run_analysis([mount], code)
+                result.update(executed)
+                result["code"] = code
+            else:
+                result["stdout"] = generated
+        except Exception as exc:
+            result["error"] = f"自定义指令执行失败：{exc}"
+        result_id = save_analysis_result(user.id, None, instruction, {**result, "code": result.get("code"), "datasets": [dataset_snapshot([mount])[0]], "execution_ms": 0})
+    return {"doc_id": doc["doc_id"], "filename": doc["filename"], "summary": summary, "result_id": result_id, "result": {**result, "result_id": result_id}}
+
+
+@app.post("/analysis/relations/{relation_id}/preview")
+def preview_analysis_relation(relation_id: str, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        row = db.query(AnalysisRelation).filter(
+            AnalysisRelation.id == relation_id, AnalysisRelation.user_id == user.id
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="关联配置不存在")
+        dataset_ids = _json_value(row.dataset_ids_json, [])
+        joins = _json_value(row.joins_json, [])
+    frames = {}
+    try:
+        for doc_id in dataset_ids:
+            doc = kb.get_document(doc_id, user_id=user.id)
+            if doc.get("ext") not in ALLOWED_EXT:
+                raise ValueError(f"{doc.get('filename')} 不是可关联的表格文件")
+            frames[doc_id] = load_dataframe(doc["path"], doc["ext"])
+        frame = frames[dataset_ids[0]]
+        for join in joins:
+            right_id = join["right_dataset_id"]
+            if right_id not in frames:
+                raise ValueError("关联条件引用了未选择的数据集")
+            frame = frame.merge(
+                frames[right_id],
+                left_on=join["left_key"], right_on=join["right_key"],
+                how=join.get("how", "left"), suffixes=("", f"_{right_id[:6]}"),
+            )
+    except (ValueError, KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=f"关联预览失败：{exc}")
+    return {"relation_id": relation_id, "name": row.name, "rows": len(frame), "table": _table_from_df(frame)}
+
+
+@app.post("/dashboards/{dashboard_id}/analyze")
+def analyze_dashboard(dashboard_id: str, payload: dict, user: User = Depends(get_current_user)):
+    instruction = str(payload.get("instruction") or "").strip()
+    dataset_ids = payload.get("dataset_ids") or []
+    if not instruction or not isinstance(dataset_ids, list) or not dataset_ids:
+        raise HTTPException(status_code=400, detail="请选择文件并填写自定义指令")
+    with get_session() as db:
+        board = db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first()
+        if board is None:
+            raise HTTPException(status_code=404, detail="仪表盘不存在")
+    mounts = []
+    try:
+        for doc_id in dataset_ids:
+            doc = kb.get_document(doc_id, user_id=user.id)
+            if doc.get("ext") not in ALLOWED_EXT:
+                raise ValueError(f"{doc.get('filename')} 不是表格文件")
+            mounts.append({"doc_id": doc_id, "path": doc["path"], "ext": doc["ext"], "filename": doc["filename"],
+                           "summary": build_summary(load_dataframe(doc["path"], doc["ext"]))})
+    except (ValueError, KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=f"读取仪表盘文件失败：{exc}")
+    try:
+        summary = "\n\n".join(dataset_summary_text(i + 1, item) for i, item in enumerate(mounts))
+        response = llm.chat_model.invoke([
+            {"role": "system", "content": llm.build_system_prompt(summary)},
+            {"role": "user", "content": instruction},
+        ])
+        generated = response.content if hasattr(response, "content") else str(response)
+        code = extract_code(generated)
+        if not code:
+            result = {"stdout": generated, "table": None, "chart": None, "error": None, "code": None}
+        else:
+            result = run_analysis_with_retries(mounts, instruction, code)
+    except llm.ModelConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        detail = str(exc)
+        if "quota" in detail.lower() or "FreeTierOnly" in detail:
+            raise HTTPException(status_code=503, detail="模型额度已用完，暂时无法执行自定义指令；请检查模型账户额度")
+        raise HTTPException(status_code=503, detail=f"模型服务暂时不可用：{detail[:200]}")
+    result_id = save_analysis_result(user.id, None, instruction, {
+        **result, "datasets": dataset_snapshot(mounts), "execution_ms": 0,
+    })
+    if not result_id:
+        raise HTTPException(status_code=500, detail="分析结果保存失败")
+    with get_session() as db:
+        item = DashboardItem(
+            id=uuid.uuid4().hex, dashboard_id=dashboard_id, result_id=result_id,
+            title=instruction[:128], chart_config_json=json.dumps({"type": "original"}), position_json="{}",
+        )
+        db.add(item)
+        board = db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first()
+        if board:
+            board.updated_at = datetime.now()
+        db.commit()
+    return {"result": {"result_id": result_id, **result}, "dashboard": get_dashboard(dashboard_id, user)}
+
+
+@app.post("/dashboards")
+def create_dashboard(payload: dict, user: User = Depends(get_current_user)):
+    name = str(payload.get("name") or "新仪表盘").strip()[:128]
+    row = Dashboard(id=uuid.uuid4().hex, user_id=user.id, name=name,
+                    description=str(payload.get("description") or "")[:500])
+    result = {"id": row.id, "name": row.name, "description": row.description, "items": []}
+    with get_session() as db:
+        db.add(row)
+        db.commit()
+    return result
+
+
+@app.get("/dashboards")
+def list_dashboards(user: User = Depends(get_current_user)):
+    with get_session() as db:
+        rows = db.query(Dashboard).filter(Dashboard.user_id == user.id).order_by(Dashboard.updated_at.desc()).all()
+        result = []
+        for row in rows:
+            count = db.query(DashboardItem).filter(DashboardItem.dashboard_id == row.id).count()
+            result.append({"id": row.id, "name": row.name, "description": row.description, "item_count": count,
+                           "updated_at": row.updated_at.isoformat(timespec="seconds") if row.updated_at else ""})
+        return result
+
+
+@app.get("/dashboards/{dashboard_id}")
+def get_dashboard(dashboard_id: str, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        board = db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first()
+        if board is None:
+            raise HTTPException(status_code=404, detail="仪表盘不存在")
+        items = db.query(DashboardItem).filter(DashboardItem.dashboard_id == board.id).order_by(DashboardItem.created_at.asc()).all()
+        result_ids = [item.result_id for item in items]
+        rows = db.query(AnalysisResult).filter(AnalysisResult.id.in_(result_ids), AnalysisResult.user_id == user.id).all() if result_ids else []
+        result_map = {row.id: _result_view(row) for row in rows}
+        return {"id": board.id, "name": board.name, "description": board.description,
+                "items": [{"id": item.id, "title": item.title,
+                           "chart_config": _json_value(item.chart_config_json, {}),
+                           "position": _json_value(item.position_json, {}),
+                           "result": result_map.get(item.result_id)} for item in items]}
+
+
+@app.post("/dashboards/{dashboard_id}/items")
+def add_dashboard_item(dashboard_id: str, payload: dict, user: User = Depends(get_current_user)):
+    result_id = payload.get("result_id")
+    if not result_id:
+        raise HTTPException(status_code=400, detail="请选择分析结果")
+    with get_session() as db:
+        board = db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first()
+        _owned_result(db, int(result_id), user)
+        if board is None:
+            raise HTTPException(status_code=404, detail="仪表盘不存在")
+        item = DashboardItem(id=uuid.uuid4().hex, dashboard_id=dashboard_id, result_id=int(result_id),
+                             title=str(payload.get("title") or "分析图表")[:128],
+                             chart_config_json=json.dumps(payload.get("chart_config") or {}, ensure_ascii=False),
+                             position_json=json.dumps(payload.get("position") or {}, ensure_ascii=False))
+        db.add(item)
+        board.updated_at = datetime.now()
+        db.commit()
+        return {"id": item.id, "dashboard_id": dashboard_id}
+
+
+@app.delete("/dashboards/{dashboard_id}")
+def delete_dashboard(dashboard_id: str, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        board = db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first()
+        if board is None:
+            raise HTTPException(status_code=404, detail="仪表盘不存在")
+        db.delete(board)
+        db.commit()
+    return {"ok": True}
+
+
+@app.delete("/dashboards/{dashboard_id}/items/{item_id}")
+def delete_dashboard_item(dashboard_id: str, item_id: str, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        board = db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first()
+        item = db.query(DashboardItem).filter(DashboardItem.id == item_id, DashboardItem.dashboard_id == dashboard_id).first()
+        if board is None or item is None:
+            raise HTTPException(status_code=404, detail="仪表盘项目不存在")
+        db.delete(item)
+        board.updated_at = datetime.now()
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/shares")
+def create_share(payload: dict, user: User = Depends(get_current_user)):
+    result_id = payload.get("result_id")
+    dashboard_id = payload.get("dashboard_id")
+    with get_session() as db:
+        if result_id:
+            _owned_result(db, int(result_id), user)
+        if dashboard_id and not db.query(Dashboard).filter(Dashboard.id == dashboard_id, Dashboard.user_id == user.id).first():
+            raise HTTPException(status_code=404, detail="仪表盘不存在")
+        if not result_id and not dashboard_id:
+            raise HTTPException(status_code=400, detail="请选择分析结果或仪表盘")
+        token = uuid.uuid4().hex
+        db.add(AnalysisShare(token=token, user_id=user.id, result_id=int(result_id) if result_id else None,
+                             dashboard_id=dashboard_id, allow_comments=True))
+        db.commit()
+    return {"token": token, "path": f"/shared/{token}"}
+
+
+def _public_share_payload(db, share: AnalysisShare) -> dict:
+    payload = {"token": share.token, "allow_comments": share.allow_comments,
+               "created_at": share.created_at.isoformat(timespec="seconds") if share.created_at else ""}
+    if share.result_id:
+        row = db.get(AnalysisResult, share.result_id)
+        payload["result"] = _result_view(row) if row else None
+    if share.dashboard_id:
+        board = db.get(Dashboard, share.dashboard_id)
+        payload["dashboard"] = {"id": board.id, "name": board.name, "description": board.description} if board else None
+        items = db.query(DashboardItem).filter(DashboardItem.dashboard_id == share.dashboard_id).all()
+        result_ids = [item.result_id for item in items]
+        rows = db.query(AnalysisResult).filter(AnalysisResult.id.in_(result_ids)).all() if result_ids else []
+        result_map = {row.id: _result_view(row) for row in rows}
+        payload["items"] = [{"id": item.id, "title": item.title, "chart_config": _json_value(item.chart_config_json, {}),
+                             "result": result_map.get(item.result_id)} for item in items]
+    payload["comments"] = [{"id": row.id, "author_name": row.author_name, "content": row.content,
+                             "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else ""}
+                            for row in db.query(AnalysisComment).filter(AnalysisComment.token == share.token).order_by(AnalysisComment.created_at.asc()).all()]
+    return payload
+
+
+@app.get("/shared/{token}")
+def get_shared(token: str):
+    with get_session() as db:
+        share = db.get(AnalysisShare, token)
+        if share is None or (share.expires_at and share.expires_at < datetime.now()):
+            raise HTTPException(status_code=404, detail="分享链接不存在或已过期")
+        return _public_share_payload(db, share)
+
+
+@app.post("/shared/{token}/comments")
+def add_shared_comment(token: str, payload: dict):
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="评论不能为空")
+    with get_session() as db:
+        share = db.get(AnalysisShare, token)
+        if share is None or not share.allow_comments:
+            raise HTTPException(status_code=404, detail="分享链接不存在或不允许评论")
+        row = AnalysisComment(token=token, author_name=str(payload.get("author_name") or "访客")[:64], content=content[:2000])
+        db.add(row)
+        db.commit()
+        return {"id": row.id, "author_name": row.author_name, "content": row.content}
+
+
+def _next_schedule(text: str, now: datetime) -> datetime:
+    raw = str(text or "").strip().lower()
+    match = re.fullmatch(r"every\s+(\d+)\s*([mhd])", raw)
+    if match:
+        amount, unit = int(match.group(1)), match.group(2)
+        seconds = amount * {"m": 60, "h": 3600, "d": 86400}[unit]
+        return now + __import__("datetime").timedelta(seconds=seconds)
+    match = re.fullmatch(r"daily\s+(\d{1,2}):(\d{2})", raw)
+    if match:
+        target = now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0, microsecond=0)
+        return target if target > now else target + __import__("datetime").timedelta(days=1)
+    raise ValueError("调度格式支持 every 15m / every 2h / daily 09:00")
+
+
+def _execute_schedule(job_id: str, user_id: int) -> dict:
+    with get_session() as db:
+        job = db.query(ScheduleJob).filter(ScheduleJob.id == job_id, ScheduleJob.user_id == user_id).first()
+        if job is None:
+            raise ValueError("调度任务不存在")
+        output = {"job": job.name, "type": job.job_type, "simulated_email": True,
+                  "recipients": _json_value(job.recipients_json, []), "executed_at": datetime.now().isoformat(timespec="seconds")}
+        error = None
+        try:
+            if job.job_type == "upload":
+                source = os.path.abspath(job.source_path or "")
+                ext = os.path.splitext(source)[1].lower()
+                if not os.path.isfile(source) or ext not in kb.KB_EXTENSIONS:
+                    raise ValueError("定时上传源文件不存在或类型不支持")
+                target = os.path.join(KB_DIR, f"{uuid.uuid4().hex}{ext}")
+                with open(source, "rb") as src, open(target, "wb") as dst:
+                    dst.write(src.read())
+                doc = kb.register_document(target, ext, os.path.basename(source), user_id=user_id)
+                output["uploaded"] = doc
+            else:
+                docs = []
+                for doc_id in _json_value(job.dataset_ids_json, []):
+                    doc = kb.get_document(doc_id, user_id=user_id)
+                    docs.append({"doc_id": doc_id, "filename": doc.get("filename"), "path": doc.get("path")})
+                output["question"] = job.question or "定时分析报告"
+                output["datasets"] = []
+                for item in docs:
+                    try:
+                        summary = build_summary(load_dataframe(item["path"], os.path.splitext(item["filename"])[1].lower()))
+                        output["datasets"].append({"doc_id": item["doc_id"], "filename": item["filename"], "rows": summary["rows"], "cols": summary["cols"]})
+                    except Exception as exc:
+                        output["datasets"].append({"doc_id": item["doc_id"], "filename": item["filename"], "error": str(exc)})
+                output["message"] = "已生成模拟分析报告；当前调度器不调用真实邮件服务。"
+        except Exception as exc:
+            error = str(exc)
+        run = ScheduleRun(job_id=job_id, status="failed" if error else "success", simulated_email=True,
+                          output_json=json.dumps(output, ensure_ascii=False), error_msg=error)
+        job.last_run_at = datetime.now()
+        try:
+            job.next_run_at = _next_schedule(job.schedule_text, job.last_run_at)
+        except ValueError:
+            job.next_run_at = None
+        db.add(run)
+        db.commit()
+        return {"id": run.id, "status": run.status, "output": output, "error": error}
+
+
+@app.get("/schedules")
+def list_schedules(user: User = Depends(get_current_user)):
+    with get_session() as db:
+        rows = db.query(ScheduleJob).filter(ScheduleJob.user_id == user.id).order_by(ScheduleJob.created_at.desc()).all()
+        return [{"id": row.id, "name": row.name, "job_type": row.job_type, "schedule_text": row.schedule_text,
+                 "dataset_ids": _json_value(row.dataset_ids_json, []), "question": row.question,
+                 "recipients": _json_value(row.recipients_json, []), "enabled": row.enabled,
+                 "last_run_at": row.last_run_at.isoformat(timespec="seconds") if row.last_run_at else None,
+                 "next_run_at": row.next_run_at.isoformat(timespec="seconds") if row.next_run_at else None} for row in rows]
+
+
+@app.post("/schedules")
+def create_schedule(payload: dict, user: User = Depends(get_current_user)):
+    try:
+        next_run = _next_schedule(str(payload.get("schedule_text") or ""), datetime.now())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    job = ScheduleJob(id=uuid.uuid4().hex, user_id=user.id, name=str(payload.get("name") or "定时任务")[:128],
+                      job_type=str(payload.get("job_type") or "analysis"), schedule_text=str(payload.get("schedule_text")),
+                      dataset_ids_json=json.dumps(payload.get("dataset_ids") or [], ensure_ascii=False),
+                      question=str(payload.get("question") or "")[:2000], source_path=str(payload.get("source_path") or "")[:512],
+                      recipients_json=json.dumps(payload.get("recipients") or [], ensure_ascii=False), next_run_at=next_run)
+    if job.job_type not in ("analysis", "upload"):
+        raise HTTPException(status_code=400, detail="任务类型只支持 analysis 或 upload")
+    result = {"id": job.id, "name": job.name, "next_run_at": next_run.isoformat(timespec="seconds")}
+    with get_session() as db:
+        db.add(job)
+        db.commit()
+    return result
+
+
+@app.post("/schedules/{job_id}/run")
+def run_schedule(job_id: str, user: User = Depends(get_current_user)):
+    try:
+        return _execute_schedule(job_id, user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.patch("/schedules/{job_id}")
+def update_schedule(job_id: str, payload: dict, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        job = db.query(ScheduleJob).filter(ScheduleJob.id == job_id, ScheduleJob.user_id == user.id).first()
+        if job is None:
+            raise HTTPException(status_code=404, detail="调度任务不存在")
+        if "enabled" in payload:
+            job.enabled = bool(payload["enabled"])
+        if "name" in payload:
+            job.name = str(payload["name"])[:128]
+        db.commit()
+    return {"ok": True}
+
+
+@app.delete("/schedules/{job_id}")
+def delete_schedule(job_id: str, user: User = Depends(get_current_user)):
+    with get_session() as db:
+        job = db.query(ScheduleJob).filter(ScheduleJob.id == job_id, ScheduleJob.user_id == user.id).first()
+        if job is None:
+            raise HTTPException(status_code=404, detail="调度任务不存在")
+        db.delete(job)
+        db.commit()
+    return {"ok": True}
+
+
+def _schedule_worker():
+    while True:
+        try:
+            now = datetime.now()
+            with get_session() as db:
+                due = db.query(ScheduleJob).filter(ScheduleJob.enabled.is_(True),
+                    ScheduleJob.next_run_at.isnot(None), ScheduleJob.next_run_at <= now).all()
+                jobs = [(row.id, row.user_id) for row in due]
+            for job_id, user_id in jobs:
+                try:
+                    _execute_schedule(job_id, user_id)
+                except Exception as exc:
+                    print("schedule execution failed:", exc, file=sys.stderr)
+        except Exception as exc:
+            print("schedule worker failed:", exc, file=sys.stderr)
+        time.sleep(30)
+
 
 
 # ———————— 会话历史持久化接口 ————————
@@ -678,6 +1445,10 @@ def get_session_messages(session_id: str, user: User = Depends(get_current_user)
                 "stdout": item.stdout,
                 "table": parse_json(item.table_json),
                 "chart": parse_json(item.chart_json),
+                "datasets": parse_json(item.dataset_json),
+                "conclusion": item.conclusion,
+                "execution_ms": item.execution_ms,
+                "created_at": item.created_at.isoformat(timespec="seconds") if item.created_at else None,
             }
             if item.error_msg:
                 payload["error"] = item.error_msg
@@ -701,14 +1472,28 @@ def get_session_messages(session_id: str, user: User = Depends(get_current_user)
 def index():
     # 根路由不鉴权：前端在加载时调 /auth/me 判断登录态
     # 加 no-cache 头：避免浏览器缓存旧版前端，每次启动都拉最新 HTML
+    frontend_index = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    index_path = frontend_index if os.path.exists(frontend_index) else os.path.join(BASE_DIR, "static", "index.html")
     return FileResponse(
-        os.path.join(BASE_DIR, "static", "index.html"),
+        index_path,
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 
 
+@app.get("/{frontend_path:path}")
+def frontend_history_fallback(frontend_path: str):
+    """生产模式下让 Vue Router 的 /workbench、/shared/* 刷新仍返回前端入口。"""
+    if frontend_path.startswith(("api/", "assets/")) or frontend_path in {"favicon.svg"}:
+        raise HTTPException(status_code=404, detail="Not Found")
+    frontend_index = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    if not os.path.exists(frontend_index):
+        raise HTTPException(status_code=404, detail="Frontend build not found")
+    return FileResponse(frontend_index, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+
 # 启动时确保默认 admin 用户存在（用 .env 的 ADMIN_PASSWORD 生成 bcrypt 哈希）
 Base.metadata.create_all(bind=engine)
+ensure_compat_schema()
 ensure_default_user()
 # 多用户隔离：向量库一致性维护（幂等）——补历史块 user_id + 清孤儿向量
 try:
@@ -718,3 +1503,8 @@ try:
               f"{_r['orphaned']} orphan doc-groups removed", file=sys.stderr)
 except Exception as e:
     print(f"[startup] vector maintenance skipped: {e}", file=sys.stderr)
+
+
+# 定时任务后台轮询：只执行本地任务并写入模拟邮件记录，不连接 SMTP。
+_schedule_thread = threading.Thread(target=_schedule_worker, name="schedule-worker", daemon=True)
+_schedule_thread.start()

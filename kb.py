@@ -12,8 +12,10 @@
 技术栈：LangChain（RecursiveCharacterTextSplitter / OpenAIEmbeddings / Chroma），
 Chroma 本地持久化到 chroma_db/。重依赖采用函数内延迟导入，不影响数据分析主流程启动。
 """
+import json
 import os
 import queue
+import shutil
 import sys
 import threading
 import uuid
@@ -24,7 +26,7 @@ from dotenv import load_dotenv
 
 from db import (
     DEFAULT_USER_ID, ensure_default_user, get_session,
-    KbFolder, KbDocument,
+    KbFolder, KbDocument, KbDocumentVersion,
 )
 
 load_dotenv()
@@ -41,6 +43,8 @@ MAX_KB_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 TOP_K = 4  # 每次提问召回的资料段数
 TEMP_FOLDER_ID = "default"  # 系统知识库：临时文件区（固定 ID，不可重命名/删除）
 TEMP_FOLDER_NAME = "临时文件"
+FAVORITE_FOLDER_ID = "favorites"
+FAVORITE_FOLDER_NAME = "收藏文件"
 
 # 文档解析状态
 STATUS_PARSING = "parsing"  # 解析中（已入队，尚未向量化）
@@ -177,6 +181,9 @@ def _doc_to_dict(d: KbDocument) -> dict:
         "chunks": d.chunks or 0,
         "error": d.error_msg or "",
         "active": bool(d.is_active),
+        "favorite": bool(d.is_favorite),
+        "tags": json.loads(d.tags_json or "[]") if (d.tags_json or "").strip().startswith("[") else [],
+        "version": int(d.version or 1),
         "created_at": d.created_at.isoformat(timespec="seconds") if d.created_at else "",
     }
 
@@ -231,6 +238,9 @@ def _upsert_doc(doc: dict) -> None:
                 chunks=int(doc.get("chunks") or 0),
                 error_msg=doc.get("error") or None,
                 is_active=bool(doc.get("active", True)),
+                is_favorite=bool(doc.get("favorite", False)),
+                tags_json=json.dumps(doc.get("tags", []), ensure_ascii=False),
+                version=int(doc.get("version") or 1),
             )
             db.add(d)
         else:
@@ -242,6 +252,9 @@ def _upsert_doc(doc: dict) -> None:
             d.chunks = int(doc.get("chunks") or 0)
             d.error_msg = doc.get("error") or None
             d.is_active = bool(doc.get("active", True))
+            d.is_favorite = bool(doc.get("favorite", False))
+            d.tags_json = json.dumps(doc.get("tags", []), ensure_ascii=False)
+            d.version = int(doc.get("version") or 1)
         db.commit()
 
 
@@ -420,9 +433,18 @@ def retry_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
 # ==================== 文档查询与管理 ====================
 
 def list_documents(user_id: int = DEFAULT_USER_ID) -> List[dict]:
-    """列出全部文档（来自注册表，含解析状态；新的在前）"""
+    """列出文档；收藏文件夹中的条目是原文档的虚拟副本，不重复存储文件和向量。"""
     docs = _load_docs(user_id)
-    return sorted(docs, key=lambda d: d.get("created_at", ""), reverse=True)
+    favorite_id = f"{FAVORITE_FOLDER_ID}_{user_id}" if user_id != DEFAULT_USER_ID else FAVORITE_FOLDER_ID
+    favorite_copies = []
+    for doc in docs:
+        if doc.get("favorite"):
+            copy = dict(doc)
+            copy["folder_id"] = favorite_id
+            copy["virtual_favorite"] = True
+            copy["source_folder_id"] = doc.get("folder_id")
+            favorite_copies.append(copy)
+    return sorted(docs + favorite_copies, key=lambda d: d.get("created_at", ""), reverse=True)
 
 
 def get_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
@@ -449,6 +471,76 @@ def delete_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> Optional[dic
                 db.delete(d)
                 db.commit()
     return doc
+
+
+def replace_document(doc_id: str, new_path: str, ext: str, filename: str,
+                     file_size: int, user_id: int = DEFAULT_USER_ID) -> dict:
+    """保存当前文件为历史版本，再切换到新文件并重新入库向量。"""
+    doc = _find_doc(doc_id, user_id)
+    if doc is None:
+        raise ValueError("文档不存在或已删除")
+    old_version = int(doc.get("version") or 1)
+    old_path = doc.get("path")
+    if old_path and os.path.exists(old_path):
+        archive_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "uploads", "kb_versions", doc_id
+        )
+        os.makedirs(archive_dir, exist_ok=True)
+        archive_path = os.path.join(archive_dir, f"v{old_version}{doc.get('ext') or ext}")
+        shutil.copy2(old_path, archive_path)
+        old_size = os.path.getsize(old_path)
+        with get_session() as db:
+            db.add(KbDocumentVersion(
+                doc_id=doc_id,
+                user_id=user_id,
+                version=old_version,
+                filename=doc.get("filename") or filename,
+                file_path=archive_path,
+                file_ext=doc.get("ext") or ext,
+                file_size=old_size,
+            ))
+            db.commit()
+        if os.path.abspath(old_path) != os.path.abspath(new_path):
+            try:
+                os.remove(old_path)
+            except OSError:
+                pass
+    try:
+        get_vectordb()._collection.delete(
+            where={"$and": [{"doc_id": doc_id}, {"user_id": user_id}]}
+        )
+    except Exception as e:
+        print("kb replace vector cleanup failed:", e, file=sys.stderr)
+    doc.update({
+        "path": new_path,
+        "ext": ext,
+        "filename": filename,
+        "status": STATUS_PARSING,
+        "chunks": 0,
+        "error": "",
+        "version": old_version + 1,
+    })
+    _upsert_doc(doc)
+    _enqueue_ingest(doc_id)
+    return doc
+
+
+def list_document_versions(doc_id: str, user_id: int = DEFAULT_USER_ID) -> List[dict]:
+    """列出指定文档的历史版本，不包含当前版本。"""
+    with get_session() as db:
+        rows = db.query(KbDocumentVersion).filter(
+            KbDocumentVersion.doc_id == doc_id,
+            KbDocumentVersion.user_id == user_id,
+        ).order_by(KbDocumentVersion.version.desc()).all()
+        return [{
+            "id": row.id,
+            "doc_id": row.doc_id,
+            "version": row.version,
+            "filename": row.filename,
+            "file_ext": row.file_ext,
+            "file_size": row.file_size,
+            "created_at": row.created_at.isoformat(timespec="seconds") if row.created_at else "",
+        } for row in rows]
 
 
 def move_document(doc_id: str, folder_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
@@ -547,6 +639,26 @@ def set_doc_active(doc_id: str, active: bool, user_id: int = DEFAULT_USER_ID) ->
     return {"doc_id": doc_id, "active": bool(active)}
 
 
+def update_doc_metadata(doc_id: str, tags: Optional[List[str]] = None,
+                         favorite: Optional[bool] = None,
+                         user_id: int = DEFAULT_USER_ID) -> dict:
+    """更新文档标签和收藏状态，不触发重新向量化。"""
+    doc = _find_doc(doc_id, user_id)
+    if doc is None:
+        raise ValueError("文档不存在或已删除")
+    if tags is not None:
+        normalized = []
+        for tag in tags:
+            value = str(tag).strip()[:32]
+            if value and value not in normalized:
+                normalized.append(value)
+        doc["tags"] = normalized[:20]
+    if favorite is not None:
+        doc["favorite"] = bool(favorite)
+    _upsert_doc(doc)
+    return {"doc_id": doc_id, "tags": doc.get("tags", []), "favorite": bool(doc.get("favorite", False))}
+
+
 # ==================== 知识库（文件夹）管理 ====================
 # 数据模型（MySQL 表 kb_folders）：
 #   Folder: {id, name, active, system, created_at}
@@ -558,6 +670,7 @@ def _folder_to_dict(f: KbFolder) -> dict:
         "name": f.name,
         "active": bool(f.is_active),
         "system": bool(f.is_system),
+        "favorite_system": bool(f.is_system and f.name == FAVORITE_FOLDER_NAME),
         "created_at": f.created_at.isoformat(timespec="seconds") if f.created_at else "",
     }
 
@@ -590,9 +703,33 @@ def _ensure_system_folder(user_id: int = DEFAULT_USER_ID) -> str:
         return f.id
 
 
+def _ensure_favorite_folder(user_id: int = DEFAULT_USER_ID) -> str:
+    """确保收藏系统文件夹存在；收藏条目以虚拟副本形式展示。"""
+    fid = FAVORITE_FOLDER_ID if user_id == DEFAULT_USER_ID else f"{FAVORITE_FOLDER_ID}_{user_id}"
+    with get_session() as db:
+        f = db.query(KbFolder).filter(
+            KbFolder.id == fid, KbFolder.user_id == user_id
+        ).first()
+        if f is None:
+            f = KbFolder(
+                id=fid,
+                user_id=user_id,
+                name=FAVORITE_FOLDER_NAME,
+                is_system=True,
+                is_active=True,
+            )
+            db.add(f)
+        elif f.name != FAVORITE_FOLDER_NAME or not f.is_system:
+            f.name = FAVORITE_FOLDER_NAME
+            f.is_system = True
+        db.commit()
+        return fid
+
+
 def _load_folders(user_id: int = DEFAULT_USER_ID) -> List[dict]:
     """从 MySQL 读取该用户的知识库列表（系统库排最前）"""
     _ensure_system_folder(user_id)
+    _ensure_favorite_folder(user_id)
     with get_session() as db:
         rows = db.query(KbFolder).filter(KbFolder.user_id == user_id).order_by(
             KbFolder.is_system.desc(), KbFolder.created_at.asc()
@@ -605,10 +742,14 @@ def list_folders(user_id: int = DEFAULT_USER_ID) -> List[dict]:
     folders = _load_folders(user_id)
     doc_n: dict = {}
     chunk_n: dict = {}
+    favorite_id = FAVORITE_FOLDER_ID if user_id == DEFAULT_USER_ID else f"{FAVORITE_FOLDER_ID}_{user_id}"
     for d in _load_docs(user_id):
         fid = d.get("folder_id") or TEMP_FOLDER_ID
         doc_n[fid] = doc_n.get(fid, 0) + 1
         chunk_n[fid] = chunk_n.get(fid, 0) + int(d.get("chunks") or 0)
+        if d.get("favorite"):
+            doc_n[favorite_id] = doc_n.get(favorite_id, 0) + 1
+            chunk_n[favorite_id] = chunk_n.get(favorite_id, 0) + int(d.get("chunks") or 0)
     return [
         {
             "id": x["id"],
@@ -680,8 +821,8 @@ def set_folder_active(folder_id: str, active: bool, user_id: int = DEFAULT_USER_
 def delete_folder(folder_id: str, user_id: int = DEFAULT_USER_ID) -> int:
     """删除知识库：其下所有文件退回系统“临时文件”库（只改外键 + 向量 metadata，
     数据安全优先，严禁级联删除文件与向量）。返回移动的文件数。"""
-    if folder_id == TEMP_FOLDER_ID:
-        raise ValueError("系统临时文件库不可删除")
+    if folder_id in (TEMP_FOLDER_ID, FAVORITE_FOLDER_ID) or folder_id.startswith(f"{FAVORITE_FOLDER_ID}_"):
+        raise ValueError("系统文件夹不可删除")
     with get_session() as db:
         f = db.get(KbFolder, folder_id)
         if f is None or f.user_id != user_id:

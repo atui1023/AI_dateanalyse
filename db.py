@@ -10,7 +10,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String, Text,
-    create_engine,
+    create_engine, inspect, text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker,
@@ -80,8 +80,24 @@ class KbDocument(Base):
     chunks: Mapped[int] = mapped_column(Integer, default=0)
     error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    tags_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class KbDocumentVersion(Base):
+    __tablename__ = "kb_document_versions"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    doc_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    file_ext: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    file_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
 class Dataset(Base):
@@ -127,8 +143,94 @@ class AnalysisResult(Base):
     stdout: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     table_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     chart_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    dataset_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    conclusion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    execution_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="running", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnalysisRelation(Base):
+    __tablename__ = "analysis_relations"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dataset_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    joins_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class Dashboard(Base):
+    __tablename__ = "dashboards"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    layout_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DashboardItem(Base):
+    __tablename__ = "dashboard_items"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    dashboard_id: Mapped[str] = mapped_column(String(32), ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False)
+    result_id: Mapped[int] = mapped_column(AUTO_ID_TYPE, nullable=False)
+    title: Mapped[str] = mapped_column(String(128), nullable=False)
+    chart_config_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    position_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnalysisShare(Base):
+    __tablename__ = "analysis_shares"
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    result_id: Mapped[Optional[int]] = mapped_column(AUTO_ID_TYPE, nullable=True)
+    dashboard_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    allow_comments: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnalysisComment(Base):
+    __tablename__ = "analysis_comments"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    token: Mapped[str] = mapped_column(String(64), ForeignKey("analysis_shares.token", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    author_name: Mapped[str] = mapped_column(String(64), default="访客", nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ScheduleJob(Base):
+    __tablename__ = "schedule_jobs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    job_type: Mapped[str] = mapped_column(String(32), default="analysis", nullable=False)
+    schedule_text: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    recipients_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ScheduleRun(Base):
+    __tablename__ = "schedule_runs"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    job_id: Mapped[str] = mapped_column(String(32), ForeignKey("schedule_jobs.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="success", nullable=False)
+    simulated_email: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    output_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -192,3 +294,33 @@ def ensure_default_user() -> int:
             user.password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
             db.commit()
         return user.id
+
+
+def ensure_compat_schema() -> None:
+    """为已有数据库补充新增字段，避免要求用户重建数据库。"""
+    additions_by_table = {
+        "analysis_results": {
+            "dataset_json": "TEXT",
+            "conclusion": "TEXT",
+            "execution_ms": "INTEGER",
+        },
+        "kb_documents": {
+            "is_favorite": "INTEGER DEFAULT 0",
+            "tags_json": "TEXT DEFAULT '[]'",
+            "version": "INTEGER DEFAULT 1",
+        },
+    }
+    pending = []
+    inspector = inspect(engine)
+    for table_name, additions in additions_by_table.items():
+        existing = {column["name"] for column in inspector.get_columns(table_name)}
+        pending.extend(
+            (table_name, name, sql_type)
+            for name, sql_type in additions.items()
+            if name not in existing
+        )
+    if not pending:
+        return
+    with engine.begin() as connection:
+        for table_name, name, sql_type in pending:
+            connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}"))

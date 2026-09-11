@@ -6,6 +6,12 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+      path: '/shared/:token',
+      name: 'shared',
+      component: () => import('@/views/SharedView.vue'),
+      meta: { public: true },
+    },
+    {
       path: '/login',
       name: 'login',
       component: () => import('@/views/LoginView.vue'),
@@ -19,6 +25,11 @@ const router = createRouter({
           path: '',
           name: 'chat',
           component: () => import('@/views/ChatView.vue'),
+        },
+        {
+          path: 'workbench',
+          name: 'workbench',
+          component: () => import('@/views/WorkbenchView.vue'),
         },
         {
           path: 'admin',

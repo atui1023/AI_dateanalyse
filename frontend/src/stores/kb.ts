@@ -2,12 +2,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as kbApi from '@/api/kb'
-import type { Folder, Document } from '@/api/kb'
+import type { Folder, Document, DatasetSummary } from '@/api/kb'
 
 export interface DatasetMount {
   doc_id: string
   filename: string
-  summary: string
+  summary: DatasetSummary
 }
 
 export const useKbStore = defineStore('kb', () => {
@@ -110,6 +110,16 @@ export const useKbStore = defineStore('kb', () => {
     if (d) d.active = active
   }
 
+  async function updateDocumentMetadata(docId: string, payload: { tags?: string[]; favorite?: boolean }) {
+    const { data } = await kbApi.updateDocumentMetadata(docId, payload)
+    const d = documents.value.find((x) => x.doc_id === docId)
+    if (d) {
+      if (data.tags) d.tags = data.tags
+      if (typeof data.favorite === 'boolean') d.favorite = data.favorite
+    }
+    return data
+  }
+
   async function mountDocument(docId: string) {
     const { data } = await kbApi.mountDocument(docId)
     // 去重
@@ -122,6 +132,7 @@ export const useKbStore = defineStore('kb', () => {
       })
       saveMounts()
     }
+    return data
   }
 
   async function unmountDocument(docId: string) {
@@ -149,6 +160,22 @@ export const useKbStore = defineStore('kb', () => {
     if (d) d.status = 'parsing'
   }
 
+  async function uploadDocumentVersion(docId: string, file: File) {
+    const { data } = await kbApi.uploadDocumentVersion(docId, file)
+    const d = documents.value.find((x) => x.doc_id === docId && !x.virtual_favorite)
+    if (d) {
+      d.filename = data.filename
+      d.version = data.version
+      d.status = 'parsing'
+    }
+    return data
+  }
+
+  async function listDocumentVersions(docId: string) {
+    const { data } = await kbApi.listDocumentVersions(docId)
+    return data
+  }
+
   async function uploadFile(file: File, folderId: string) {
     const { data } = await kbApi.uploadFile(file, folderId)
     // 后端返回 doc_id/status，列表会轮询刷新
@@ -160,7 +187,8 @@ export const useKbStore = defineStore('kb', () => {
     activeFolderIds, activeDocIds, mountIds,
     fetchFolders, fetchDocuments, reset, reconcileOwner,
     createFolder, renameFolder, deleteFolder, toggleFolderActive,
-    toggleDocActive, mountDocument, unmountDocument,
+    toggleDocActive, updateDocumentMetadata, mountDocument, unmountDocument,
     moveDocument, deleteDocument, retryDocument, uploadFile,
+    uploadDocumentVersion, listDocumentVersions,
   }
 })

@@ -11,6 +11,7 @@
 将来升级流程（多路召回、自动纠错、路由分发）时只改本文件的链定义。
 """
 import os
+import re
 from typing import Dict, Iterator, List, Optional
 
 from dotenv import load_dotenv
@@ -195,6 +196,43 @@ def rewrite_question(history: List[Dict[str, str]], question: str) -> str:
         return rewritten or question
     except Exception:
         return question
+
+
+
+def repair_analysis_code(question: str, code: str, error: str) -> Optional[str]:
+    """Generate one corrected analysis-code version from an execution error."""
+    prompt = f"""You are repairing generated pandas analysis code.
+
+User question:
+{question}
+
+Original code:
+```python
+{code}
+```
+
+Execution error:
+{error}
+
+Fix the code while preserving the user's intent. The final code must assign the
+ table to result, assign chart when a chart is appropriate, print a Chinese
+ conclusion, use the mounted df1/df2/... dataframes, and avoid file/network I/O.
+Return exactly one complete ```python code block and no explanation.
+"""
+    try:
+        response = chat_model.invoke([
+            {"role": "system", "content": "You are a rigorous data-analysis code repair assistant."},
+            {"role": "user", "content": prompt},
+        ])
+        content = response.content if hasattr(response, "content") else str(response)
+        if not isinstance(content, str):
+            content = "".join(str(item) for item in content)
+        match = re.search(r"```(?:python)?\s*\n?(.*?)```", content, re.S)
+        return match.group(1).strip() if match else None
+    except (APIConnectionError, APITimeoutError) as e:
+        raise ModelConnectionError(_connection_error_message(e, 3)) from e
+    except Exception:
+        return None
 
 
 class ModelConnectionError(Exception):

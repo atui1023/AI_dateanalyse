@@ -16,7 +16,6 @@
     "lucide-vue-next": "^1.0.0",
     "pinia": "^4.0.3",
     "vue": "^3.5.41",
-    "vue-echarts": "^8.3.0",
     "vue-router": "^4.6.4"
   },
   "devDependencies": {

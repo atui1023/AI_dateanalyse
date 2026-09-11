@@ -21,6 +21,11 @@ export default defineConfig({
       '/chat': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/datasets': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/upload': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/analysis': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/dashboards': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/shares': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/shared': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/schedules': { target: 'http://127.0.0.1:8000', changeOrigin: true },
     },
   },
 })

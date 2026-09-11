@@ -9,13 +9,15 @@
 - **知识库问答**：文档解析、分块、Embedding、Chroma 向量检索和来源引用。
 - **多用户隔离**：bcrypt 密码哈希、Session Cookie、用户数据隔离和管理员后台。
 - **会话持久化**：保存聊天消息和分析结果，重新进入会话后恢复表格与图表。
-- **文件管理**：知识库文件夹、文档移动、启用/停用、失败重试及表格挂载。
+- **文件管理**：知识库文件夹、收藏、标签、版本、文档移动、失败重试及表格挂载。
+- **分析工作台**：多数据集关联、仪表盘、自定义分析、分享评论和本地定时任务。
+- **安全执行**：限制分析代码的网络、文件、子进程、执行时间、内存和输出长度。
 - **Windows 兼容**：分析执行器统一使用 UTF-8，支持中文、`✓`、`✅` 等字符。
 
 ## 技术栈
 
 - 后端：FastAPI、LangChain、OpenAI SDK、pandas、SQLAlchemy 2.0
-- 数据库：SQLite（默认）或 MySQL
+- 数据库：SQLite 或 MySQL（通过 `DATABASE_URL` 切换）
 - 知识库：Chroma、OpenAI 兼容 Embedding API、pypdf
 - 前端：Vue 3、Vite、TypeScript、Pinia、Element Plus、ECharts
 
@@ -30,8 +32,10 @@
 | `db.py` | 用户、会话、消息、分析结果和知识库 ORM 模型 |
 | `auth.py` | 登录、注册、管理员接口、Session 和审计日志 |
 | `frontend/` | Vue 3 前端工程 |
+| `scripts/migrate_sqlite_to_mysql.py` | SQLite 到 MySQL 的备份、迁移和校验工具 |
 | `start.bat` | 推荐的 Windows 一键启动入口 |
 | `start.vbs` | 无窗口启动入口 |
+| `start_frontend.cmd` | Vite 开发模式入口（热更新） |
 | `stop.bat` | 停止后端服务 |
 | `ROADMAP.md` | 产品发展清单 |
 
@@ -70,7 +74,18 @@ EMBEDDING_MODEL=text-embedding-v3
 DATABASE_URL=sqlite:///./data_analysis.db
 SESSION_SECRET=请替换为随机长字符串
 ADMIN_PASSWORD=请设置管理员强密码
+
+ANALYSIS_TIMEOUT_SECONDS=30
+ANALYSIS_MEMORY_LIMIT_MB=1536
 ```
+
+使用 MySQL 时，还需填写 `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD`，然后执行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\migrate_sqlite_to_mysql.py --switch-env
+```
+
+迁移工具会先备份 SQLite 和目标 MySQL 数据库，迁移全部表并逐表校验数量，成功后才切换 `.env`。
 
 可以生成随机 Session 密钥：
 
@@ -83,21 +98,32 @@ ADMIN_PASSWORD=请设置管理员强密码
 双击 `start.bat`，脚本会：
 
 1. 替换占用 `8000` 的旧后端进程。
-2. 替换占用 `5173` 的旧前端进程。
-3. 使用 UTF-8 环境启动 FastAPI 和 Vue。
-4. 打开 `http://localhost:5173/`。
+2. 构建最新 Vue 前端到 `frontend/dist`。
+3. 使用 UTF-8 环境启动 FastAPI，并由 FastAPI 托管前端资源。
+4. 打开 `http://127.0.0.1:8000/`。
 
 不希望显示命令窗口时可双击 `start.vbs`。默认管理员用户名为 `admin`，密码是 `.env` 中的 `ADMIN_PASSWORD`。
 
-### 手动启动
+### 手动启动生产模式
 
 ```powershell
-# 终端一：后端
+# 先构建前端，再启动后端
+cd frontend
+npm run build
+cd ..
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+### 开发模式
+
+先启动后端，再运行 `start_frontend.cmd`，访问 `http://127.0.0.1:5173/`。Vite 会将后端接口代理到 `8000` 并提供前端热更新。
+
+```powershell
+# 终端一
 .\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 
-# 终端二：前端
-cd frontend
-npm run dev -- --host 127.0.0.1 --strictPort
+# 终端二
+.\start_frontend.cmd
 ```
 
 ## 使用流程
@@ -149,8 +175,8 @@ npm run dev -- --host 127.0.0.1 --strictPort
 ## 验证
 
 ```powershell
-# Windows GBK/UTF-8 回归测试
-.\.venv\Scripts\python.exe tests\test_runner_encoding.py
+# 全部后端回归测试（编码、自动纠错和沙箱）
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 
 # 后端语法检查
 .\.venv\Scripts\python.exe -m py_compile main.py llm.py kb.py db.py runner.py
@@ -164,7 +190,7 @@ npm run build
 
 - `.env`、数据库、上传文件、日志和向量库均已排除在 Git 之外。
 - 不要把 API Key、数据库密码或 Session 密钥提交到仓库。
-- 模型生成的代码仅用于只读分析，但生产部署仍应增加操作系统级 CPU、内存、文件和网络隔离。
+- 分析执行器会拦截网络、文件和子进程访问，并由主进程监控执行时间与内存。若对外提供服务，仍建议增加容器或操作系统级隔离。
 - 模型和 Embedding 调用会使用你自己的 API 配额并产生费用。
 
 后续功能规划见 [`ROADMAP.md`](ROADMAP.md)。

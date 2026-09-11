@@ -74,7 +74,7 @@ KB_DIR = os.path.join(UPLOAD_DIR, "kb")
 FRONTEND_DIST_DIR = os.path.join(BASE_DIR, "frontend", "dist")
 os.makedirs(KB_DIR, exist_ok=True)
 
-# 生产/桌面启动统一托管 Vue 构建产物，避免误加载历史遗留的 static/index.html。
+# 生产/桌面启动统一托管 Vue 构建产物。
 if os.path.isdir(os.path.join(FRONTEND_DIST_DIR, "assets")):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST_DIR, "assets")), name="frontend-assets")
     app.mount("/favicon.svg", StaticFiles(directory=FRONTEND_DIST_DIR), name="frontend-favicon")
@@ -1473,9 +1473,10 @@ def index():
     # 根路由不鉴权：前端在加载时调 /auth/me 判断登录态
     # 加 no-cache 头：避免浏览器缓存旧版前端，每次启动都拉最新 HTML
     frontend_index = os.path.join(FRONTEND_DIST_DIR, "index.html")
-    index_path = frontend_index if os.path.exists(frontend_index) else os.path.join(BASE_DIR, "static", "index.html")
+    if not os.path.exists(frontend_index):
+        raise HTTPException(status_code=503, detail="前端尚未构建，请先运行 npm --prefix frontend run build")
     return FileResponse(
-        index_path,
+        frontend_index,
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 

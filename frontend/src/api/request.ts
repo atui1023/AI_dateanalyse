@@ -38,7 +38,7 @@ request.interceptors.response.use(
     } else if (status >= 400 && status < 500) {
       ElMessage.error(typeof detail === 'string' ? detail : '请求失败')
     } else if (status >= 500) {
-      ElMessage.error('服务器错误，请稍后重试')
+      ElMessage.error(typeof detail === 'string' ? detail : '服务器错误，请稍后重试')
     }
     return Promise.reject(err)
   },

@@ -69,7 +69,7 @@ ANALYSIS_PROMPT_TEMPLATE = """你是一名严谨的数据分析师。用户上�
 请根据用户的问题编写 pandas 分析代码，要求：
 
 【代码规范】
-1. 只做只读分析：不读写文件、不联网；可用库：pandas（pd）、numpy（np）、scipy、scikit-learn（sklearn）、statsmodels（均已预装，可直接 import）；禁止 import matplotlib、seaborn、plotly 等绘图库（未安装），图表只能通过下面的 chart 变量交给前端渲染
+1. 只做只读分析：不读写文件、不联网；可用库：pandas（pd）、numpy（np）、polars、duckdb、pyarrow、scipy、scikit-learn（sklearn）、statsmodels、seaborn、plotly、xgboost（均已预置，可直接 import）；禁止用绘图库写文件或弹出窗口，图表仍必须通过下面的 chart 变量交给前端渲染
 2. 禁止调用任何退出函数：exit()、quit()、sys.exit()、os._exit() 等。代码在沙箱中执行，由沙箱统一接管结束；调用退出函数会导致分析失败、结果无法回传
 3. 引用列名必须与摘要中原样一致（注意空格和大小写）；不确定列是否存在时，先 print(df.columns) 确认再取列。重命名列后，后续所有代码必须使用新列名，不能再访问旧列名
 4. 需要跨文件关联分析时，用 pd.merge / pd.concat / join 等，先在代码中确认关联键存在并完成合并，再统计

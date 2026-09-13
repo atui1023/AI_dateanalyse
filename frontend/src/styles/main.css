@@ -80,6 +80,7 @@ a {
 
 .el-button { font-weight: 500; box-shadow: none; }
 .el-button:not(.is-circle) { min-height: 32px; padding-inline: 13px; }
+.el-button + .el-button { margin-left: 8px; }
 .el-button--primary { border-color: var(--primary); background: var(--primary); }
 .el-button--default:hover,
 .el-button--default:focus-visible {
@@ -122,6 +123,11 @@ a {
 .el-table th.el-table__cell { color: var(--text-secondary); font-weight: 600; }
 .el-tag { border-radius: 4px; }
 .el-empty__description p { color: var(--text-tertiary); }
+
+/* Keep compact controls readable when several actions share one row. */
+.el-button-group .el-button + .el-button { margin-left: 0; }
+.el-form-item { margin-bottom: 16px; }
+.el-alert { margin: 10px 0; }
 
 @media (max-width: 760px) {
   .el-message-box, .el-dialog { max-width: calc(100vw - 24px); }

@@ -26,6 +26,7 @@ TABLE_ORDER = [
     "kb_folders",
     "kb_documents",
     "kb_document_versions",
+    "mounted_datasets",
     "datasets",
     "sessions",
     "chat_messages",
@@ -37,6 +38,10 @@ TABLE_ORDER = [
     "analysis_comments",
     "schedule_jobs",
     "schedule_runs",
+    "workflows",
+    "workflow_steps",
+    "workflow_runs",
+    "workflow_run_steps",
     "audit_logs",
 ]
 

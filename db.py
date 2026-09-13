@@ -9,7 +9,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, ForeignKey, Integer, JSON, String, Text,
+    BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text,
     create_engine, inspect, text,
 )
 from sqlalchemy.orm import (
@@ -139,6 +139,8 @@ class AnalysisResult(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     session_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     stdout: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     table_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -149,6 +151,15 @@ class AnalysisResult(Base):
     error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="running", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class MountedDataset(Base):
+    __tablename__ = "mounted_datasets"
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(32), ForeignKey("kb_documents.doc_id", ondelete="CASCADE"), primary_key=True)
+    summary_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class AnalysisRelation(Base):
@@ -173,6 +184,15 @@ class Dashboard(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class DashboardWorkspaceShare(Base):
+    __tablename__ = "dashboard_workspace_shares"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    dashboard_id: Mapped[str] = mapped_column(String(32), ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False, unique=True)
+    workspace_id: Mapped[str] = mapped_column(String(32), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class DashboardItem(Base):
     __tablename__ = "dashboard_items"
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -191,6 +211,10 @@ class AnalysisShare(Base):
     result_id: Mapped[Optional[int]] = mapped_column(AUTO_ID_TYPE, nullable=True)
     dashboard_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     allow_comments: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    allow_download: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    access_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_access_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
@@ -215,10 +239,14 @@ class ScheduleJob(Base):
     dataset_ids_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     question: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    parameters_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     recipients_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     next_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    lock_token: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -234,6 +262,58 @@ class ScheduleRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class Workflow(Base):
+    __tablename__ = "workflows"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class WorkflowStep(Base):
+    __tablename__ = "workflow_steps"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(32), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False)
+    step_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    step_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    config_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(32), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="running", nullable=False)
+    current_step: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    input_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    output_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class WorkflowRunStep(Base):
+    __tablename__ = "workflow_run_steps"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(32), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False)
+    step_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    step_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    step_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    input_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    output_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    error_msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
@@ -244,6 +324,80 @@ class AuditLog(Base):
     detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AlertRecord(Base):
+    __tablename__ = "alert_records"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    rule_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    muted_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = mapped_column(String(32), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), default="viewer", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class DatasetWorkspaceShare(Base):
+    __tablename__ = "dataset_workspace_shares"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    doc_id: Mapped[str] = mapped_column(String(32), ForeignKey("kb_documents.doc_id", ondelete="CASCADE"), nullable=False, unique=True)
+    workspace_id: Mapped[str] = mapped_column(String(32), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class FolderWorkspaceShare(Base):
+    __tablename__ = "folder_workspace_shares"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    folder_id: Mapped[str] = mapped_column(String(32), ForeignKey("kb_folders.id", ondelete="CASCADE"), nullable=False, unique=True)
+    workspace_id: Mapped[str] = mapped_column(String(32), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    created_by: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class UsageEvent(Base):
+    __tablename__ = "usage_events"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    execution_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class PlanSubscription(Base):
+    __tablename__ = "plan_subscriptions"
+    id: Mapped[int] = mapped_column(AUTO_ID_TYPE, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
+    plan: Mapped[str] = mapped_column(String(32), default="free", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    monthly_limit: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    used_units: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    period_start: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    period_end: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 # ==================== 会话工具 ====================
@@ -300,6 +454,8 @@ def ensure_compat_schema() -> None:
     """为已有数据库补充新增字段，避免要求用户重建数据库。"""
     additions_by_table = {
         "analysis_results": {
+            "title": "VARCHAR(255) NULL",
+            "is_favorite": "INTEGER DEFAULT 0",
             "dataset_json": "TEXT",
             "conclusion": "TEXT",
             "execution_ms": "INTEGER",
@@ -308,6 +464,18 @@ def ensure_compat_schema() -> None:
             "is_favorite": "INTEGER DEFAULT 0",
             "tags_json": "TEXT DEFAULT '[]'",
             "version": "INTEGER DEFAULT 1",
+        },
+        "schedule_jobs": {
+            "locked_at": "DATETIME NULL",
+            "lock_token": "VARCHAR(32) NULL",
+            "workflow_id": "VARCHAR(32) NULL",
+            "parameters_json": "TEXT NULL",
+        },
+        "analysis_shares": {
+            "password_hash": "VARCHAR(255) NULL",
+            "allow_download": "INTEGER DEFAULT 1",
+            "access_count": "INTEGER DEFAULT 0",
+            "last_access_at": "DATETIME NULL",
         },
     }
     pending = []

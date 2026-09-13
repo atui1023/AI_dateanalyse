@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import * as adminApi from '@/api/admin'
-import type { AdminUser, AuditLog } from '@/api/admin'
+import type { AdminUser, AuditLog, AdminMetrics } from '@/api/admin'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Key, Delete } from 'lucide-vue-next'
 
-const activeTab = ref<'users' | 'logs'>('users')
+const activeTab = ref<'users' | 'logs' | 'metrics'>('users')
 const users = ref<AdminUser[]>([])
 const logs = ref<AuditLog[]>([])
 const loading = ref(false)
+const metrics = ref<AdminMetrics | null>(null)
 
 // 创建用户表单
 const createForm = ref({
@@ -42,10 +43,21 @@ async function loadLogs() {
   }
 }
 
-function switchTab(tab: 'users' | 'logs') {
+async function loadMetrics() {
+  loading.value = true
+  try {
+    const { data } = await adminApi.getMetrics()
+    metrics.value = data
+  } finally {
+    loading.value = false
+  }
+}
+
+function switchTab(tab: 'users' | 'logs' | 'metrics') {
   activeTab.value = tab
   if (tab === 'users' && users.value.length === 0) loadUsers()
   if (tab === 'logs' && logs.value.length === 0) loadLogs()
+  if (tab === 'metrics') loadMetrics()
 }
 
 async function handleCreate() {
@@ -163,6 +175,20 @@ function formatTime(t: string) {
           <el-table-column prop="ip" label="IP" width="120" />
         </el-table>
       </el-tab-pane>
+
+      <el-tab-pane label="平台指标" name="metrics">
+        <div class="metrics-actions"><el-button size="small" @click="loadMetrics">刷新</el-button></div>
+        <div v-if="metrics" v-loading="loading" class="metrics-grid">
+          <div class="metric"><span>用户总数</span><strong>{{ metrics.users.total }}</strong></div>
+          <div class="metric"><span>活跃用户</span><strong>{{ metrics.users.active }}</strong></div>
+          <div class="metric"><span>分析结果</span><strong>{{ metrics.analysis_results }}</strong></div>
+          <div class="metric"><span>任务成功率</span><strong>{{ (metrics.tasks.success_rate * 100).toFixed(1) }}%</strong></div>
+          <div class="metric"><span>执行次数</span><strong>{{ metrics.usage.events }}</strong></div>
+          <div class="metric"><span>执行耗时</span><strong>{{ (metrics.usage.execution_ms / 1000).toFixed(1) }}s</strong></div>
+          <div class="metric"><span>Token 用量</span><strong>{{ metrics.usage.tokens }}</strong></div>
+          <div class="metric"><span>估算成本</span><strong>${{ metrics.usage.cost_usd.toFixed(4) }}</strong></div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -195,6 +221,13 @@ function formatTime(t: string) {
   background: #fff;
   box-shadow: 0 3px 12px rgba(35, 54, 50, .025);
 }
+
 .admin-view :deep(.el-tabs) { max-width: 1180px; margin: 0 auto; }
 .admin-view :deep(.el-tabs__content) { padding-top: 4px; }
+.metrics-actions { margin-bottom: 12px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; }
+.metric { padding: 18px; border: 1px solid var(--border-light); border-radius: 8px; background: #fff; }
+.metric span { display: block; color: var(--text-tertiary); font-size: 12px; }
+.metric strong { display: block; margin-top: 10px; color: var(--text); font-size: 24px; font-weight: 600; }
+@media (max-width: 760px) { .metrics-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); } }
 </style>

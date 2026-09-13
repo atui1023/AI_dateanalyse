@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useKbStore } from '@/stores/kb'
+import * as teamApi from '@/api/team'
+import * as kbApi from '@/api/kb'
 import type { DatasetSummary, DocumentVersion } from '@/api/kb'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -19,11 +21,21 @@ const moveTargetDoc = ref<string | null>(null)
 const moveTargetFolder = ref<string>('')
 const moveDialogVisible = ref(false)
 const previewVisible = ref(false)
+const previewDocId = ref('')
 const previewFilename = ref('')
 const previewSummary = ref<DatasetSummary | null>(null)
 const versionDialogVisible = ref(false)
 const versionDocName = ref('')
 const versionRows = ref<DocumentVersion[]>([])
+const shareDialogVisible = ref(false)
+const shareDocId = ref('')
+const shareDocName = ref('')
+const shareWorkspaceId = ref('')
+const workspaces = ref<teamApi.Workspace[]>([])
+const folderShareDialogVisible = ref(false)
+const shareFolderId = ref('')
+const shareFolderName = ref('')
+const shareFolderWorkspaceId = ref('')
 
 const TAB_EXT = ['.csv', '.xlsx', '.xls']
 
@@ -91,6 +103,7 @@ async function handleUpload(file: File, folderId: string) {
   try {
     const result = await kb.uploadFile(file, folderId)
     if (result.summary) {
+      previewDocId.value = result.doc_id
       previewFilename.value = result.filename
       previewSummary.value = result.summary
       previewVisible.value = true
@@ -106,10 +119,24 @@ async function handleUpload(file: File, folderId: string) {
 
 async function handleMount(docId: string) {
   const result = await kb.mountDocument(docId)
+  previewDocId.value = docId
   previewFilename.value = result.filename
   previewSummary.value = result.summary
   previewVisible.value = true
   ElMessage.success('已挂载')
+}
+
+async function handleCleanDocument() {
+  if (!previewDocId.value) return
+  try {
+    const result = await kb.cleanDocument(previewDocId.value)
+    previewDocId.value = result.doc_id
+    previewFilename.value = result.filename
+    previewSummary.value = result.summary || null
+    ElMessage.success(`已生成清洗副本，移除 ${result.removed_rows} 行`)
+  } catch {
+    // axios 拦截器已提示
+  }
 }
 
 async function handleUnmount(docId: string) {
@@ -190,7 +217,63 @@ function mountIndex(docId: string) {
 }
 
 async function handleRefresh() {
-  await Promise.all([kb.fetchFolders(), kb.fetchDocuments()])
+  await Promise.all([kb.fetchFolders(), kb.fetchDocuments(), kb.fetchMounted()])
+}
+
+async function openShareDialog(docId: string, filename: string) {
+  shareDocId.value = docId
+  shareDocName.value = filename
+  shareWorkspaceId.value = kb.documents.find((d) => d.doc_id === docId)?.shared_workspace_id || ''
+  try { workspaces.value = (await teamApi.listWorkspaces()).data } catch { workspaces.value = [] }
+  shareDialogVisible.value = true
+}
+
+async function saveShare() {
+  if (!shareDocId.value || !shareWorkspaceId.value) return ElMessage.warning('请选择团队')
+  try {
+    await kbApi.shareDocumentToWorkspace(shareDocId.value, shareWorkspaceId.value)
+    await kb.fetchDocuments()
+    shareDialogVisible.value = false
+    ElMessage.success('数据集已共享给团队成员')
+  } catch { /* axios 拦截器已提示 */ }
+}
+
+async function cancelShare() {
+  if (!shareDocId.value) return
+  try {
+    await kbApi.unshareDocumentFromWorkspace(shareDocId.value)
+    await kb.fetchDocuments()
+    shareDialogVisible.value = false
+    ElMessage.success('已取消数据集共享')
+  } catch { /* axios 拦截器已提示 */ }
+}
+
+async function openFolderShareDialog(folderId: string, name: string) {
+  shareFolderId.value = folderId
+  shareFolderName.value = name
+  shareFolderWorkspaceId.value = kb.folders.find((f) => f.id === folderId)?.shared_workspace_id || ''
+  try { workspaces.value = (await teamApi.listWorkspaces()).data } catch { workspaces.value = [] }
+  folderShareDialogVisible.value = true
+}
+
+async function saveFolderShare() {
+  if (!shareFolderId.value || !shareFolderWorkspaceId.value) return ElMessage.warning('请选择团队')
+  try {
+    await kbApi.shareFolderToWorkspace(shareFolderId.value, shareFolderWorkspaceId.value)
+    await handleRefresh()
+    folderShareDialogVisible.value = false
+    ElMessage.success('知识库已共享给团队成员')
+  } catch { /* axios 拦截器已提示 */ }
+}
+
+async function cancelFolderShare() {
+  if (!shareFolderId.value) return
+  try {
+    await kbApi.unshareFolderFromWorkspace(shareFolderId.value)
+    await handleRefresh()
+    folderShareDialogVisible.value = false
+    ElMessage.success('已取消知识库共享')
+  } catch { /* axios 拦截器已提示 */ }
 }
 </script>
 
@@ -253,6 +336,7 @@ async function handleRefresh() {
           <span class="folder-name">{{ f.name }}</span>
           <el-tag v-if="f.favorite_system" size="small" type="warning">收藏</el-tag>
           <el-tag v-else-if="f.system" size="small" type="info">系统</el-tag>
+          <el-tag v-else-if="f.read_only" size="small" type="success">团队共享</el-tag>
           <el-checkbox
             v-if="!f.system"
             :model-value="f.active"
@@ -261,14 +345,15 @@ async function handleRefresh() {
             title="勾选后该知识库参与 RAG 检索"
           />
           <div class="folder-actions" @click.stop>
+            <el-button v-if="!f.system && !f.read_only" size="small" text title="团队共享" @click="openFolderShareDialog(f.id, f.name)">共享</el-button>
             <el-button
-              v-if="!f.system"
+              v-if="!f.system && !f.read_only"
               size="small"
               text
               @click="handleRenameFolder(f.id, f.name)"
             ><el-icon><Pencil /></el-icon></el-button>
             <el-button
-              v-if="!f.system"
+              v-if="!f.system && !f.read_only"
               size="small"
               text
               type="danger"
@@ -298,6 +383,8 @@ async function handleRefresh() {
             <span v-if="d.tags?.length" class="doc-tags" :title="d.tags.join('、')">
               <el-icon><Tag /></el-icon>{{ d.tags.join('、') }}
             </span>
+            <el-tag v-if="d.read_only" size="small" type="success">团队共享</el-tag>
+            <el-button v-if="!d.read_only && !d.virtual_favorite" size="small" text title="团队共享" @click="openShareDialog(d.doc_id, d.filename)">共享</el-button>
 
             <!-- 状态 -->
             <span v-if="d.status === 'ready'" class="st st-ready">
@@ -335,7 +422,7 @@ async function handleRefresh() {
             <el-button size="small" text @click="handleEditTags(d.doc_id, d.tags || [])" title="编辑标签">
               <el-icon><Tag /></el-icon>
             </el-button>
-            <template v-if="!d.virtual_favorite">
+            <template v-if="!d.virtual_favorite && !d.read_only">
               <el-upload
                 :show-file-list="false"
                 :before-upload="(f: File) => { handleUploadVersion(d.doc_id, f); return false }"
@@ -386,6 +473,30 @@ async function handleRefresh() {
       </el-table>
     </el-dialog>
 
+    <el-dialog v-model="shareDialogVisible" :title="`团队共享 · ${shareDocName}`" width="min(460px, 92vw)" append-to-body>
+      <p class="muted">团队成员可以查看并挂载数据集，但不能修改或删除原文件。</p>
+      <el-select v-model="shareWorkspaceId" placeholder="选择团队" style="width: 100%">
+        <el-option v-for="workspace in workspaces" :key="workspace.id" :label="workspace.name + '（' + workspace.role + '）'" :value="workspace.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="shareDialogVisible = false">取消</el-button>
+        <el-button plain @click="cancelShare">取消共享</el-button>
+        <el-button type="primary" @click="saveShare">保存共享</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="folderShareDialogVisible" :title="`知识库共享 · ${shareFolderName}`" width="min(460px, 92vw)" append-to-body>
+      <p class="muted">团队成员可以查看并挂载其中的数据集，但不能修改文件夹或文档。</p>
+      <el-select v-model="shareFolderWorkspaceId" placeholder="选择团队" style="width: 100%">
+        <el-option v-for="workspace in workspaces" :key="workspace.id" :label="workspace.name + '（' + workspace.role + '）'" :value="workspace.id" />
+      </el-select>
+      <template #footer>
+        <el-button @click="folderShareDialogVisible = false">取消</el-button>
+        <el-button plain @click="cancelFolderShare">取消共享</el-button>
+        <el-button type="primary" @click="saveFolderShare">保存共享</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="previewVisible" :title="`数据预览 · ${previewFilename}`" width="min(900px, 92vw)" append-to-body>
       <template v-if="previewSummary">
         <div class="summary-stats">
@@ -420,6 +531,16 @@ async function handleRefresh() {
             <template #default="{ row }">{{ row[index] }}</template>
           </el-table-column>
         </el-table>
+      </template>
+      <template #footer>
+        <el-button @click="previewVisible = false">关闭</el-button>
+        <el-button
+          v-if="previewDocId && previewSummary && previewSummary.quality.issues.length"
+          type="primary"
+          @click="handleCleanDocument"
+        >
+          生成清洗副本
+        </el-button>
       </template>
     </el-dialog>
   </div>

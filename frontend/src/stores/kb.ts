@@ -13,32 +13,9 @@ export interface DatasetMount {
 export const useKbStore = defineStore('kb', () => {
   const folders = ref<Folder[]>([])
   const documents = ref<Document[]>([])
-  // 挂载为分析用的数据集；持久化到 localStorage（带所属用户 id），
-  // 同一用户刷新页面后恢复，切换用户时按 uid 校验并清空，避免串到新用户
-  const MOUNTS_KEY = 'kb_mounts'
-  interface MountsPayload { uid: number | null; mounts: DatasetMount[] }
-
-  function loadPayload(): MountsPayload {
-    try {
-      const raw = localStorage.getItem(MOUNTS_KEY)
-      const obj = raw ? JSON.parse(raw) : null
-      if (obj && Array.isArray(obj.mounts)) {
-        return { uid: typeof obj.uid === 'number' ? obj.uid : null, mounts: obj.mounts }
-      }
-    } catch {
-      // 旧格式/损坏数据：忽略
-    }
-    return { uid: null, mounts: [] }
-  }
-
-  const initial = loadPayload()
-  // 当前挂载归属的用户 id；与登录用户不一致时挂载作废
-  const mountOwnerUid = ref<number | null>(initial.uid)
-  const mounts = ref<DatasetMount[]>(initial.mounts)
-
-  function saveMounts() {
-    localStorage.setItem(MOUNTS_KEY, JSON.stringify({ uid: mountOwnerUid.value, mounts: mounts.value }))
-  }
+  // 挂载状态由后端数据库维护，前端只保存当前页面缓存。
+  const mountOwnerUid = ref<number | null>(null)
+  const mounts = ref<DatasetMount[]>([])
   const loading = ref(false)
 
   // 绑定当前登录用户：本地缓存的挂载若属于另一个用户（或无主），一律清空
@@ -47,7 +24,6 @@ export const useKbStore = defineStore('kb', () => {
     if (mountOwnerUid.value !== uid) {
       mounts.value = []
       mountOwnerUid.value = uid
-      localStorage.removeItem(MOUNTS_KEY)
     }
   }
 
@@ -57,7 +33,6 @@ export const useKbStore = defineStore('kb', () => {
     documents.value = []
     mounts.value = []
     mountOwnerUid.value = null
-    localStorage.removeItem(MOUNTS_KEY)
   }
 
   // RAG 检索时勾选的文件夹/文档（active 状态）
@@ -80,6 +55,11 @@ export const useKbStore = defineStore('kb', () => {
     documents.value = data
   }
 
+  async function fetchMounted() {
+    const { data } = await kbApi.listMountedDocuments()
+    mounts.value = data
+  }
+
   async function createFolder(name: string) {
     const { data } = await kbApi.createFolder(name)
     folders.value.push(data)
@@ -97,7 +77,6 @@ export const useKbStore = defineStore('kb', () => {
     folders.value = folders.value.filter((f) => f.id !== id)
     documents.value = documents.value.filter((d) => d.folder_id !== id)
     mounts.value = mounts.value.filter((m) => !documents.value.some((d) => d.doc_id === m.doc_id))
-    saveMounts()
   }
 
   async function toggleFolderActive(id: string, active: boolean) {
@@ -130,7 +109,6 @@ export const useKbStore = defineStore('kb', () => {
         filename: doc?.filename || data.filename,
         summary: data.summary,
       })
-      saveMounts()
     }
     return data
   }
@@ -138,7 +116,6 @@ export const useKbStore = defineStore('kb', () => {
   async function unmountDocument(docId: string) {
     await kbApi.unmountDocument(docId)
     mounts.value = mounts.value.filter((m) => m.doc_id !== docId)
-    saveMounts()
   }
 
   async function moveDocument(docId: string, folderId: string) {
@@ -151,13 +128,18 @@ export const useKbStore = defineStore('kb', () => {
     await kbApi.deleteDocument(docId)
     documents.value = documents.value.filter((d) => d.doc_id !== docId)
     mounts.value = mounts.value.filter((m) => m.doc_id !== docId)
-    saveMounts()
   }
 
   async function retryDocument(docId: string) {
     await kbApi.retryDocument(docId)
     const d = documents.value.find((x) => x.doc_id === docId)
     if (d) d.status = 'parsing'
+  }
+
+  async function cleanDocument(docId: string) {
+    const { data } = await kbApi.cleanDocument(docId)
+    await fetchDocuments()
+    return data
   }
 
   async function uploadDocumentVersion(docId: string, file: File) {
@@ -185,10 +167,10 @@ export const useKbStore = defineStore('kb', () => {
   return {
     folders, documents, mounts, loading,
     activeFolderIds, activeDocIds, mountIds,
-    fetchFolders, fetchDocuments, reset, reconcileOwner,
+    fetchFolders, fetchDocuments, fetchMounted, reset, reconcileOwner,
     createFolder, renameFolder, deleteFolder, toggleFolderActive,
     toggleDocActive, updateDocumentMetadata, mountDocument, unmountDocument,
-    moveDocument, deleteDocument, retryDocument, uploadFile,
+    moveDocument, deleteDocument, retryDocument, cleanDocument, uploadFile,
     uploadDocumentVersion, listDocumentVersions,
   }
 })

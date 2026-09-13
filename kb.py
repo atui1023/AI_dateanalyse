@@ -12,6 +12,7 @@
 技术栈：LangChain（RecursiveCharacterTextSplitter / OpenAIEmbeddings / Chroma），
 Chroma 本地持久化到 chroma_db/。重依赖采用函数内延迟导入，不影响数据分析主流程启动。
 """
+import hashlib
 import json
 import os
 import queue
@@ -33,7 +34,12 @@ load_dotenv()
 
 API_KEY = os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL")
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "remote").strip().lower()
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
+LOCAL_EMBEDDING_MODEL = os.getenv(
+    "LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5"
+)
+LOCAL_EMBEDDING_DEVICE = os.getenv("LOCAL_EMBEDDING_DEVICE", "cpu")
 CHROMA_DIR = os.getenv(
     "CHROMA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "chroma_db")
 )
@@ -62,10 +68,71 @@ _worker_lock = threading.Lock()
 
 # ==================== 向量库与 Embedding（懒加载） ====================
 
+class LocalSentenceTransformerEmbeddings:
+    """最小 LangChain Embeddings 适配器，避免绑定额外集成包。"""
+
+    def __init__(self, model_name: str, device: str = "cpu"):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "本地向量模型依赖未安装，请执行：pip install sentence-transformers"
+            ) from exc
+        self.model = SentenceTransformer(model_name, device=device)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        vectors = self.model.encode(
+            texts,
+            batch_size=32,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        return vectors.tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_documents([text])[0]
+
+
+def embedding_collection_name(
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    explicit_name: Optional[str] = None,
+) -> str:
+    """按向量后端和模型隔离集合，避免维度或语义空间不同的向量混用。"""
+    explicit_name = explicit_name if explicit_name is not None else os.getenv("CHROMA_COLLECTION")
+    if explicit_name:
+        return explicit_name.strip()
+
+    provider = (provider or EMBEDDING_PROVIDER).strip().lower()
+    model = model or (LOCAL_EMBEDDING_MODEL if provider == "local" else EMBEDDING_MODEL)
+    # 兼容已有安装：默认远程模型继续读取原来的 kb_store 集合。
+    if provider == "remote" and model == "text-embedding-v3":
+        return "kb_store"
+    fingerprint = hashlib.sha1(f"{provider}:{model}".encode("utf-8")).hexdigest()[:12]
+    return f"kb_store_{provider}_{fingerprint}"
+
+
+def embedding_config() -> dict:
+    """返回当前向量配置；不包含密钥，可用于日志和诊断。"""
+    model = LOCAL_EMBEDDING_MODEL if EMBEDDING_PROVIDER == "local" else EMBEDDING_MODEL
+    return {
+        "provider": EMBEDDING_PROVIDER,
+        "model": model,
+        "device": LOCAL_EMBEDDING_DEVICE if EMBEDDING_PROVIDER == "local" else None,
+        "collection": embedding_collection_name(),
+    }
+
 def get_embeddings():
     """Embedding 客户端（懒加载，全进程复用）"""
     global _embeddings
     if _embeddings is None:
+        if EMBEDDING_PROVIDER == "local":
+            _embeddings = LocalSentenceTransformerEmbeddings(
+                LOCAL_EMBEDDING_MODEL, device=LOCAL_EMBEDDING_DEVICE
+            )
+            return _embeddings
+        if EMBEDDING_PROVIDER != "remote":
+            raise RuntimeError("EMBEDDING_PROVIDER 仅支持 remote 或 local")
         invalid_values = ("your_", "replace_", "your-llm-endpoint")
         if (
             not API_KEY
@@ -99,7 +166,7 @@ def get_vectordb():
         client = chromadb.PersistentClient(path=CHROMA_DIR)
         _vectordb = Chroma(
             client=client,
-            collection_name="kb_store",
+            collection_name=embedding_collection_name(),
             embedding_function=get_embeddings(),
         )
     return _vectordb
@@ -123,10 +190,19 @@ def _tabular_to_pages(path: str, ext: str) -> List[str]:
     import pandas as pd
 
     if ext == ".csv":
-        try:
-            df = pd.read_csv(path)
-        except UnicodeDecodeError:
-            df = pd.read_csv(path, encoding="gbk")
+        df = None
+        last_error = None
+        for encoding in ("utf-8-sig", "utf-8", "gbk", "utf-16"):
+            try:
+                df = pd.read_csv(path, encoding=encoding)
+                break
+            except (UnicodeDecodeError, pd.errors.ParserError) as exc:
+                last_error = exc
+        if df is None:
+            try:
+                df = pd.read_csv(path, encoding="utf-8-sig", engine="python", on_bad_lines="skip")
+            except Exception as exc:
+                raise ValueError(f"CSV 文件解析失败：{last_error or exc}") from exc
     else:
         df = pd.read_excel(path)
 
@@ -300,6 +376,17 @@ def _enqueue_ingest(doc_id: str) -> None:
     _ingest_queue.put(doc_id)
 
 
+def resume_pending_ingest() -> int:
+    """服务重启后恢复 parsing 状态的文档，避免进程内队列丢任务。"""
+    with get_session() as db:
+        ids = [row.doc_id for row in db.query(KbDocument).filter(
+            KbDocument.status == STATUS_PARSING
+        ).all()]
+    for doc_id in ids:
+        _enqueue_ingest(doc_id)
+    return len(ids)
+
+
 def _ingest_worker() -> None:
     while True:
         doc_id = _ingest_queue.get()
@@ -428,6 +515,62 @@ def retry_document(doc_id: str, user_id: int = DEFAULT_USER_ID) -> dict:
     _upsert_doc(doc)
     _enqueue_ingest(doc_id)
     return doc
+
+
+def rebuild_embeddings(user_id: Optional[int] = None) -> dict:
+    """使用当前向量模型同步重建文档向量，供迁移模型时调用。"""
+    # 先初始化模型；依赖缺失或模型下载失败时，不修改任何文档状态和向量。
+    get_embeddings()
+    with get_session() as db:
+        query = db.query(KbDocument)
+        if user_id is not None:
+            query = query.filter(KbDocument.user_id == user_id)
+        doc_ids = [row.doc_id for row in query.order_by(KbDocument.created_at.asc()).all()]
+
+    rebuilt = 0
+    failed = 0
+    skipped = 0
+    errors = []
+    col = get_vectordb()._collection
+    for doc_id in doc_ids:
+        doc = _find_doc(doc_id, user_id=None)
+        if doc is None:
+            skipped += 1
+            continue
+        if not os.path.exists(doc["path"]):
+            doc["status"] = STATUS_FAILED
+            doc["chunks"] = 0
+            doc["error"] = "原始文件已丢失或被移动，请重新上传"
+            _upsert_doc(doc)
+            failed += 1
+            errors.append({"doc_id": doc_id, "filename": doc["filename"], "error": doc["error"]})
+            continue
+
+        owner_id = doc.get("user_id", DEFAULT_USER_ID)
+        col.delete(where={"$and": [{"doc_id": doc_id}, {"user_id": owner_id}]})
+        doc["status"] = STATUS_PARSING
+        doc["chunks"] = 0
+        doc["error"] = ""
+        _upsert_doc(doc)
+        _do_ingest(doc_id)
+        updated = _find_doc(doc_id, user_id=None)
+        if updated and updated["status"] == STATUS_READY:
+            rebuilt += 1
+        else:
+            failed += 1
+            errors.append({
+                "doc_id": doc_id,
+                "filename": doc["filename"],
+                "error": (updated or {}).get("error", "向量化失败"),
+            })
+    return {
+        **embedding_config(),
+        "total": len(doc_ids),
+        "rebuilt": rebuilt,
+        "failed": failed,
+        "skipped": skipped,
+        "errors": errors,
+    }
 
 
 # ==================== 文档查询与管理 ====================

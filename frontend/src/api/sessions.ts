@@ -14,6 +14,10 @@ export interface ChatMessage {
   content: string
   result?: {
     result_id?: number | null
+    question?: string | null
+    title?: string | null
+    is_favorite?: boolean
+    code?: string | null
     stdout?: string | null
     table?: { columns: string[]; rows: any[][]; truncated?: boolean } | null
     chart?: Record<string, any> | null

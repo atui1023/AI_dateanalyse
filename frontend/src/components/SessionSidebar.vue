@@ -135,15 +135,17 @@ function formatTime(t: string) {
 .sidebar-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 12px 10px;
 }
 .session-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-height: 48px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  margin-bottom: 6px;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   cursor: pointer;
   position: relative;
 }
@@ -152,6 +154,7 @@ function formatTime(t: string) {
 }
 .session-item.active {
   background: var(--primary-light);
+  border-color: #c9ddd8;
   box-shadow: inset 3px 0 0 var(--primary);
 }
 .session-item.active .session-title {
@@ -183,6 +186,7 @@ function formatTime(t: string) {
   gap: 4px;
 }
 .session-actions .el-button {
+  margin-left: 0;
   width: 26px;
   height: 26px;
   border-color: transparent;

@@ -21,6 +21,13 @@ export interface AuditLog {
   created_at: string
 }
 
+export interface AdminMetrics {
+  users: { total: number; active: number }
+  analysis_results: number
+  tasks: { success: number; failed: number; success_rate: number }
+  usage: { events: number; tokens: number; execution_ms: number; cost_usd: number }
+}
+
 export function listUsers() {
   return request.get<AdminUser[]>('/auth/admin/users')
 }
@@ -44,4 +51,8 @@ export function deleteUser(userId: number) {
 
 export function listAuditLogs(limit: number = 200) {
   return request.get<AuditLog[]>('/auth/admin/audit-logs', { params: { limit } })
+}
+
+export function getMetrics() {
+  return request.get<AdminMetrics>('/admin/metrics')
 }

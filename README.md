@@ -30,9 +30,11 @@
 | `runner.py` | 受限分析执行器，输出文字、表格和 ECharts 配置 |
 | `kb.py` | 文档解析、切分、向量化、Chroma 检索和知识库管理 |
 | `db.py` | 用户、会话、消息、分析结果和知识库 ORM 模型 |
+| `data_sources.py` | 外部数据库连接器；当前支持 MySQL 连接测试，并预留 PostgreSQL/SQL Server 驱动 |
 | `auth.py` | 登录、注册、管理员接口、Session 和审计日志 |
 | `frontend/` | Vue 3 前端工程 |
 | `scripts/migrate_sqlite_to_mysql.py` | SQLite 到 MySQL 的备份、迁移和校验工具 |
+| `scripts/verify_mysql_backup.py` | 校验 MySQL 备份库与生产库的表行数 |
 | `start.bat` | 推荐的 Windows 一键启动入口 |
 | `start.vbs` | 无窗口启动入口 |
 | `start_frontend.cmd` | Vite 开发模式入口（热更新） |
@@ -69,7 +71,10 @@ Copy-Item .env.example .env
 API_KEY=你的真实API密钥
 BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 MODEL=qwen-plus
+EMBEDDING_PROVIDER=remote
 EMBEDDING_MODEL=text-embedding-v3
+LOCAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+LOCAL_EMBEDDING_DEVICE=cpu
 
 DATABASE_URL=sqlite:///./data_analysis.db
 SESSION_SECRET=请替换为随机长字符串
@@ -84,6 +89,10 @@ ANALYSIS_MEMORY_LIMIT_MB=1536
 ```powershell
 .\.venv\Scripts\python.exe scripts\migrate_sqlite_to_mysql.py --switch-env
 ```
+
+生产部署时建议将 `STORAGE_DIR` 指向独立持久化磁盘，并使用 `deploy/nginx.conf.example` 配置 HTTPS 反向代理。MySQL 备份演练可先运行 `scripts\backup_mysql.py` 创建快照，再运行 `scripts\verify_mysql_backup.py <备份库名>` 校验表行数；恢复前应先停止应用并完成人工确认。
+
+工作台的“数据源”页可选择 MySQL 并测试外部数据库连接，连接测试只执行 `SELECT 1`，同时返回可读取的表名列表，不会保存数据库密码或修改外部数据。PostgreSQL 和 SQL Server 已预留连接器，分别按需安装 `psycopg2-binary` 或 `pyodbc` 后接入。
 
 迁移工具会先备份 SQLite 和目标 MySQL 数据库，迁移全部表并逐表校验数量，成功后才切换 `.env`。
 
@@ -144,7 +153,17 @@ cd ..
 3. 等待状态变为“就绪”。
 4. 切换到知识库模式并提问。
 
-知识库必须正确配置 `API_KEY`、`BASE_URL` 和 `EMBEDDING_MODEL`。扫描版 PDF 暂不支持 OCR。
+知识库可以使用远程或本地向量模型。远程模式需要正确配置 `API_KEY`、`BASE_URL` 和 `EMBEDDING_MODEL`；本地模式将 `EMBEDDING_PROVIDER` 改为 `local`，并安装 `sentence-transformers`。扫描版 PDF 暂不支持 OCR。
+
+切换向量模型后必须重建已有文档的向量。不同模型会使用隔离的 Chroma 集合，旧集合不会被删除：
+
+```powershell
+pip install -r requirements.txt
+# 编辑 .env：EMBEDDING_PROVIDER=local
+.\.venv\Scripts\python.exe scripts\rebuild_embeddings.py
+```
+
+本地模型首次运行可能需要下载模型文件；下载完成后，知识库问答不再消耗远程 Embedding 配额。聊天模型 `MODEL` 与向量模型是两条独立配置，聊天额度耗尽仍需更换 `MODEL` 或对应的 `BASE_URL`。
 
 ## 常见问题
 

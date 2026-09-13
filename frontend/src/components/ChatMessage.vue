@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, nextTick, toRaw } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, toRaw, computed } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { Download, Bookmark, AlertTriangle, FileSpreadsheet, FileText, Printer } from 'lucide-vue-next'
@@ -7,13 +7,17 @@ import { Download, Bookmark, AlertTriangle, FileSpreadsheet, FileText, Printer }
 interface ChartData { series?: any; [k: string]: any }
 interface TableData { columns: string[]; rows: any[][]; truncated?: boolean }
 interface ResultData {
-  stdout?: string
+  result_id?: number | null
+  question?: string
+  title?: string | null
+  code?: string | null
+  stdout?: string | null
   table?: TableData
-  chart?: ChartData
+  chart?: ChartData | null
   datasets?: { dataset_id?: string; filename?: string; rows?: number; cols?: number; columns?: string[] }[] | null
   execution_ms?: number | null
   created_at?: string | null
-  error?: string
+  error?: string | null
 }
 interface SourceItem { filename: string; snippet: string }
 
@@ -21,9 +25,27 @@ const props = defineProps<{
   role: 'user' | 'assistant'
   text: string
   result?: ResultData | null
+  chartConfig?: Record<string, any> | null
   sources?: SourceItem[] | null
   streaming?: boolean
+  allowDownload?: boolean
 }>()
+
+const effectiveChart = computed(() => {
+  const config = props.chartConfig
+  const table = props.result?.table
+  const source = props.result?.chart
+  if (!config || !config.type || config.type === 'original') return source || null
+  if (!table?.columns?.length || !table.rows?.length) return source || null
+  const xIndex = Math.max(0, table.columns.indexOf(config.x_field || table.columns[0]))
+  const yIndex = Math.max(0, table.columns.indexOf(config.y_field || table.columns[1] || table.columns[0]))
+  const categories = table.rows.map((row: any[]) => String(row[xIndex] ?? ''))
+  const values = table.rows.map((row: any[]) => Number(row[yIndex]) || 0)
+  if (config.type === 'pie') {
+    return { title: { text: config.title || props.result?.question || '' }, tooltip: { trigger: 'item' }, series: [{ type: 'pie', radius: '55%', data: categories.map((name, i) => ({ name, value: values[i] })) }] }
+  }
+  return { title: { text: config.title || props.result?.question || '' }, tooltip: { trigger: 'axis' }, xAxis: { type: 'category', data: categories }, yAxis: { type: 'value' }, series: [{ type: config.type, data: values }] }
+})
 
 const chartRef = ref<HTMLElement | null>(null)
 // echarts 实例是重对象，用普通变量保存，避免被 Vue 代理
@@ -37,7 +59,7 @@ function disposeChart() {
 }
 
 function renderCharts() {
-  const chart = props.result?.chart
+  const chart = effectiveChart.value
   if (!chart) {
     disposeChart()
     return
@@ -167,7 +189,7 @@ onMounted(() => {
   if (chartRef.value) resizeObserver.observe(chartRef.value)
   document.addEventListener('visibilitychange', renderCharts)
 })
-watch(() => props.result, renderCharts, { deep: true })
+watch([() => props.result, () => props.chartConfig], renderCharts, { deep: true })
 onBeforeUnmount(() => {
   cancelAnimationFrame(renderFrame)
   resizeObserver?.disconnect()
@@ -192,10 +214,10 @@ onBeforeUnmount(() => {
           <div class="label">分析结论</div>
           <pre class="stdout">{{ result.stdout }}</pre>
         </div>
-        <div v-if="result.chart" class="result-section">
+        <div v-if="effectiveChart" class="result-section">
           <div class="label chart-label">
             可视化图表
-            <el-button size="small" text @click="exportChart">
+            <el-button v-if="props.allowDownload !== false" size="small" text @click="exportChart">
               <el-icon><Download /></el-icon> 导出 PNG
             </el-button>
           </div>
@@ -215,13 +237,17 @@ onBeforeUnmount(() => {
           </table>
           <div v-if="result.table.truncated" class="meta">仅显示前 200 行</div>
         </div>
-        <div v-if="result.table || result.chart" class="export-actions">
+        <div v-if="(result.table || effectiveChart) && props.allowDownload !== false" class="export-actions">
           <span class="label">导出结果</span>
           <el-button v-if="result.table" size="small" text @click="exportCsv"><el-icon><Download /></el-icon> CSV</el-button>
           <el-button v-if="result.table" size="small" text @click="exportExcel"><el-icon><FileSpreadsheet /></el-icon> Excel</el-button>
           <el-button size="small" text @click="exportPdf"><el-icon><FileText /></el-icon> PDF</el-button>
           <el-button size="small" text @click="exportPdf"><el-icon><Printer /></el-icon> 打印</el-button>
         </div>
+        <details v-if="result.code" class="result-section code-details">
+          <summary class="label">生成代码</summary>
+          <pre class="code-block">{{ result.code }}</pre>
+        </details>
         <div v-if="result.error" class="result-section err">
           <el-icon><AlertTriangle /></el-icon> {{ result.error }}
         </div>
@@ -332,6 +358,26 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   max-height: 300px;
   overflow-y: auto;
+}
+.code-details {
+  border-top: 1px solid var(--border-light);
+  padding-top: 8px;
+}
+.code-details summary {
+  cursor: pointer;
+  user-select: none;
+}
+.code-block {
+  margin: 6px 0 0;
+  padding: 12px;
+  overflow: auto;
+  max-height: 360px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: #202522;
+  color: #e8f2ec;
+  font: 12px/1.55 Consolas, Monaco, monospace;
+  white-space: pre;
 }
 .chart {
   width: 100%;

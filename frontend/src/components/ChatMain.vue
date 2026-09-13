@@ -6,7 +6,7 @@ import { streamChat, AuthError } from '@/api/chat'
 import { notifyUnauthorized } from '@/api/request'
 import ChatMessage from './ChatMessage.vue'
 import { ElMessage } from 'element-plus'
-import { Send, ClipboardList } from 'lucide-vue-next'
+import { Send, ClipboardList, Download, Sparkles, RefreshCw } from 'lucide-vue-next'
 
 const sessions = useSessionsStore()
 const kb = useKbStore()
@@ -22,16 +22,21 @@ interface StreamMessage {
   result?: any
   sources?: any[] | null
   streaming?: boolean
+  retryText?: string
 }
 const streamMessages = ref<StreamMessage[]>([])
 
 const analysisTemplates = [
-  { key: 'trend', label: '趋势分析', prompt: '请按时间字段分析核心指标的趋势，给出总体变化、关键拐点，并绘制折线图。' },
-  { key: 'ranking', label: '排名分析', prompt: '请按核心指标对对象进行排名，展示前 10 名，并说明排名靠前对象的主要原因。' },
-  { key: 'yoy', label: '同比环比', prompt: '请按时间字段计算核心指标的同比和环比变化，指出增长最快和下降最明显的期间。' },
-  { key: 'customer', label: '客户贡献', prompt: '请分析各客户的销售额和贡献度，计算累计贡献占比，并识别重点客户。' },
-  { key: 'inventory', label: '库存周转', prompt: '请分析库存周转情况，计算各商品或类别的周转率，识别周转过慢和库存风险。' },
-  { key: 'outlier', label: '异常检测', prompt: '请检测数据中的异常值和异常期间，说明异常记录、异常程度以及可能原因。' },
+  { key: 'trend', group: '通用分析', label: '趋势分析', prompt: '请按时间字段分析核心指标的趋势，给出总体变化、关键拐点，并绘制折线图。' },
+  { key: 'ranking', group: '通用分析', label: '排名分析', prompt: '请按核心指标对对象进行排名，展示前 10 名，并说明排名靠前对象的主要原因。' },
+  { key: 'yoy', group: '通用分析', label: '同比环比', prompt: '请按时间字段计算核心指标的同比和环比变化，指出增长最快和下降最明显的期间。' },
+  { key: 'customer', group: '通用分析', label: '客户贡献', prompt: '请分析各客户的销售额和贡献度，计算累计贡献占比，并识别重点客户。' },
+  { key: 'inventory', group: '通用分析', label: '库存周转', prompt: '请分析库存周转情况，计算各商品或类别的周转率，识别周转过慢和库存风险。' },
+  { key: 'outlier', group: '通用分析', label: '异常检测', prompt: '请检测数据中的异常值和异常期间，说明异常记录、异常程度以及可能原因。' },
+  { key: 'ecommerce', group: '行业模板', label: '电商经营诊断', prompt: '请按日期、渠道、商品和订单字段分析电商经营情况，拆解销售额、订单数、客单价和转化趋势，识别增长来源、滞销商品和需要优先改进的环节，并生成图表。' },
+  { key: 'sales', group: '行业模板', label: '销售漏斗分析', prompt: '请分析销售线索、商机、成交和回款数据，计算各阶段转化率、销售周期和人员贡献，找出流失最严重的环节并给出改进建议。' },
+  { key: 'finance', group: '行业模板', label: '财务经营分析', prompt: '请从收入、成本、费用、利润和现金流字段分析经营状况，计算毛利率、净利率和期间变化，识别异常波动并给出经营建议。' },
+  { key: 'operations', group: '行业模板', label: '运营效率分析', prompt: '请分析各部门或业务环节的处理量、完成率、耗时和异常数，比较不同团队的效率，定位瓶颈并生成可执行的优化建议。' },
 ]
 
 function applyAnalysisTemplate(prompt: string) {
@@ -40,8 +45,25 @@ function applyAnalysisTemplate(prompt: string) {
 }
 
 const mountList = computed(() => kb.mounts)
+const showOnboarding = computed(() => streamMessages.value.length === 0)
 
-onMounted(() => {
+function downloadSampleData() {
+  const csv = '\uFEFF日期,渠道,销售额,订单数\n2026-01-01,线上,12800,96\n2026-01-02,门店,9400,71\n2026-01-03,线上,15600,112\n2026-01-04,门店,10100,79\n2026-01-05,线上,18400,135\n2026-01-06,门店,11900,88\n2026-01-07,线上,20100,148\n'
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = '销售分析示例数据.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success('示例 CSV 已下载')
+}
+
+function useQuickPrompt() {
+  mode.value = 'analysis'
+  input.value = analysisTemplates[0].prompt
+}
+
+onMounted(async () => {
   if (sessions.currentId && sessions.messages.length) {
     // 历史消息转为渲染格式
     streamMessages.value = sessions.messages.map((m) => ({
@@ -50,6 +72,23 @@ onMounted(() => {
       result: m.result ?? null,
     }))
     scrollToBottom()
+  }
+  const draftRaw = localStorage.getItem('analysis-draft')
+  if (draftRaw) {
+    try {
+      const draft = JSON.parse(draftRaw)
+      if (draft?.question) {
+        mode.value = 'analysis'
+        input.value = draft.question
+      }
+      if (Array.isArray(draft?.dataset_ids) && draft.dataset_ids.length) {
+        await Promise.all(draft.dataset_ids.map((id: string) => kb.mountDocument(id)))
+      }
+    } catch {
+      // 忽略损坏的临时草稿
+    } finally {
+      localStorage.removeItem('analysis-draft')
+    }
   }
 })
 
@@ -84,6 +123,14 @@ function scrollToBottom() {
   nextTick(() => {
     if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
   })
+}
+
+function retryFailed(index: number) {
+  const failed = streamMessages.value[index]
+  if (!failed?.retryText || sending.value) return
+  if (streamMessages.value[index - 1]?.role === 'user') streamMessages.value.splice(index - 1, 2)
+  input.value = failed.retryText
+  handleSend()
 }
 
 async function handleSend() {
@@ -150,6 +197,7 @@ async function handleSend() {
         am().sources = evt.sources || []
       } else if (evt.type === 'error') {
         am().text = '出错了：' + evt.error
+        am().retryText = text
       }
     })
 
@@ -169,6 +217,7 @@ async function handleSend() {
       notifyUnauthorized()
     } else {
       am().text = '网络错误：' + (e.message || '未知错误')
+      am().retryText = text
       ElMessage.error('发送失败')
     }
   } finally {
@@ -189,17 +238,29 @@ function handleKeydown(e: KeyboardEvent) {
   <section class="chat-main">
     <!-- 消息流 -->
     <div ref="chatEl" class="msg-stream">
-      <ChatMessage
-        v-for="(m, i) in streamMessages"
-        :key="i"
-        :role="m.role"
-        :text="m.text"
-        :result="m.result"
-        :sources="m.sources"
-        :streaming="m.streaming"
-      />
-      <div v-if="streamMessages.length === 0" class="tip">
-        开始新的对话，输入问题开始分析
+      <template v-for="(m, i) in streamMessages" :key="i">
+        <ChatMessage
+          :role="m.role"
+          :text="m.text"
+          :result="m.result"
+          :sources="m.sources"
+          :streaming="m.streaming"
+        />
+        <div v-if="m.retryText" class="retry-action">
+          <el-button size="small" plain @click="retryFailed(i)">
+            <el-icon><RefreshCw /></el-icon>重试
+          </el-button>
+        </div>
+      </template>
+      <div v-if="showOnboarding" class="onboarding">
+        <div class="onboarding-icon"><Sparkles :size="20" /></div>
+        <h1>从一份数据开始</h1>
+        <p>上传 CSV 或 Excel，挂载后即可用自然语言完成分析、图表和报告。</p>
+        <div class="onboarding-actions">
+          <el-button plain @click="downloadSampleData"><el-icon><Download /></el-icon>下载示例 CSV</el-button>
+          <el-button type="primary" @click="useQuickPrompt"><el-icon><Sparkles /></el-icon>使用趋势模板</el-button>
+        </div>
+        <div class="onboarding-next">下一步：在左侧知识库上传并挂载数据集，然后回到这里提问。</div>
       </div>
     </div>
 
@@ -218,9 +279,12 @@ function handleKeydown(e: KeyboardEvent) {
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item v-for="item in analysisTemplates" :key="item.key" :command="item.prompt">
-                {{ item.label }}
-              </el-dropdown-item>
+              <template v-for="group in [...new Set(analysisTemplates.map((item) => item.group))]" :key="group">
+                <el-dropdown-item disabled>{{ group }}</el-dropdown-item>
+                <el-dropdown-item v-for="item in analysisTemplates.filter((entry) => entry.group === group)" :key="item.key" :command="item.prompt">
+                  {{ item.label }}
+                </el-dropdown-item>
+              </template>
             </el-dropdown-menu>
           </template>
         </el-dropdown>        <div v-if="mode === 'analysis' && mountList.length" class="mount-list">
@@ -261,6 +325,48 @@ function handleKeydown(e: KeyboardEvent) {
   overflow-y: auto;
   padding: 26px clamp(18px, 4vw, 54px);
   scroll-behavior: smooth;
+}
+.onboarding {
+  width: min(620px, 100%);
+  margin: auto;
+  padding: 28px 18px 42px;
+  text-align: center;
+  color: var(--text-primary);
+}
+.onboarding-icon {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #e6f3eb;
+  color: #2f8050;
+}
+.onboarding h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 650;
+}
+.onboarding p {
+  margin: 0 auto 18px;
+  max-width: 480px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.onboarding-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.onboarding-next {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.retry-action {
+  margin: -8px 0 12px 46px;
 }
 .tip {
   width: min(420px, 100%);

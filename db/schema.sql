@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     user_id         BIGINT       NOT NULL COMMENT '所属用户',
     session_id      VARCHAR(32)  DEFAULT NULL COMMENT '所属会话',
     question        TEXT         NOT NULL COMMENT '用户问题',
+    title           VARCHAR(255) DEFAULT NULL COMMENT '结果展示标题',
+    is_favorite     TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '是否收藏',
     code            MEDIUMTEXT   DEFAULT NULL COMMENT '生成的分析代码',
     stdout          MEDIUMTEXT   DEFAULT NULL COMMENT '执行标准输出',
     table_json      MEDIUMTEXT   DEFAULT NULL COMMENT '结果表格(JSON)',
@@ -140,7 +142,46 @@ CREATE TABLE IF NOT EXISTS analysis_relations (
     CONSTRAINT fk_relation_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='多数据集关联配置';
 
--- ---------- 9. 仪表盘表 ----------
+-- ---------- 9. 团队空间 ----------
+CREATE TABLE IF NOT EXISTS workspaces (
+    id VARCHAR(32) PRIMARY KEY, owner_id BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_workspace_owner (owner_id),
+    CONSTRAINT fk_workspace_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='团队空间';
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY, workspace_id VARCHAR(32) NOT NULL,
+    user_id BIGINT NOT NULL, role VARCHAR(16) NOT NULL DEFAULT 'viewer',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_workspace_member (workspace_id, user_id),
+    INDEX idx_workspace_member_user (user_id),
+    CONSTRAINT fk_workspace_member_workspace FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    CONSTRAINT fk_workspace_member_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='团队成员';
+
+CREATE TABLE IF NOT EXISTS dataset_workspace_shares (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY, doc_id VARCHAR(32) NOT NULL UNIQUE,
+    workspace_id VARCHAR(32) NOT NULL, created_by BIGINT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_dataset_share_workspace (workspace_id),
+    CONSTRAINT fk_dataset_share_doc FOREIGN KEY (doc_id) REFERENCES kb_documents(doc_id) ON DELETE CASCADE,
+    CONSTRAINT fk_dataset_share_workspace FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dataset_share_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据集团队共享';
+
+CREATE TABLE IF NOT EXISTS folder_workspace_shares (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY, folder_id VARCHAR(32) NOT NULL UNIQUE,
+    workspace_id VARCHAR(32) NOT NULL, created_by BIGINT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_folder_share_workspace (workspace_id),
+    CONSTRAINT fk_folder_share_folder FOREIGN KEY (folder_id) REFERENCES kb_folders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_folder_share_workspace FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    CONSTRAINT fk_folder_share_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库团队共享';
+
+-- ---------- 10. 仪表盘表 ----------
 CREATE TABLE IF NOT EXISTS dashboards (
     id VARCHAR(32) PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(128) NOT NULL,
     description TEXT DEFAULT NULL, layout_json MEDIUMTEXT NOT NULL,
@@ -149,6 +190,16 @@ CREATE TABLE IF NOT EXISTS dashboards (
     INDEX idx_dashboard_user (user_id),
     CONSTRAINT fk_dashboard_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='分析仪表盘';
+
+CREATE TABLE IF NOT EXISTS dashboard_workspace_shares (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY, dashboard_id VARCHAR(32) NOT NULL UNIQUE,
+    workspace_id VARCHAR(32) NOT NULL, created_by BIGINT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_dashboard_share_workspace (workspace_id),
+    CONSTRAINT fk_dashboard_share_dashboard FOREIGN KEY (dashboard_id) REFERENCES dashboards(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dashboard_share_workspace FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    CONSTRAINT fk_dashboard_share_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='仪表盘团队共享';
 
 CREATE TABLE IF NOT EXISTS dashboard_items (
     id VARCHAR(32) PRIMARY KEY, dashboard_id VARCHAR(32) NOT NULL, result_id BIGINT NOT NULL,
@@ -162,6 +213,8 @@ CREATE TABLE IF NOT EXISTS dashboard_items (
 CREATE TABLE IF NOT EXISTS analysis_shares (
     token VARCHAR(64) PRIMARY KEY, user_id BIGINT NOT NULL, result_id BIGINT DEFAULT NULL,
     dashboard_id VARCHAR(32) DEFAULT NULL, allow_comments TINYINT(1) NOT NULL DEFAULT 1,
+    password_hash VARCHAR(255) DEFAULT NULL, allow_download TINYINT(1) NOT NULL DEFAULT 1,
+    access_count INT NOT NULL DEFAULT 0, last_access_at DATETIME DEFAULT NULL,
     expires_at DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_share_user (user_id),
     CONSTRAINT fk_share_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE

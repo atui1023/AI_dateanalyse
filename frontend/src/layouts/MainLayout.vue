@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { Database, LayoutDashboard, LogOut, MessageSquare, Shield } from 'lucide-vue-next'
+import { Database, GitBranch, LayoutDashboard, LogOut, MessageSquare, Shield } from 'lucide-vue-next'
 
 const router = useRouter()
 const route = useRoute()
@@ -31,6 +31,9 @@ async function handleLogout() {
         </el-button>
         <el-button :class="{ active: route.name === 'workbench' }" text @click="router.push('/workbench')">
           <el-icon><LayoutDashboard /></el-icon><span>工作台</span>
+        </el-button>
+        <el-button :class="{ active: route.name === 'workflows' }" text @click="router.push('/workflows')">
+          <el-icon><GitBranch /></el-icon><span>流水线</span>
         </el-button>
         <el-button
           v-if="auth.user?.role === 'admin'"

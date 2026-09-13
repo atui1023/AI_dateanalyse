@@ -6,7 +6,7 @@ manifest JSON 格式：[{"path": 数据文件路径, "ext": 扩展名}, ...]
 
 约定：
 - 各数据集按顺序加载为 DataFrame 变量 df1、df2、……（df 等价于 df1），pd / np 可用
-- 预装库：scipy、sklearn、statsmodels（顶层已导入，子模块可自行 import）
+- 预装库：scipy、sklearn、statsmodels、polars、duckdb、pyarrow、seaborn、plotly、xgboost（已安装时可直接使用）
 - 基础库：pandas、numpy、openpyxl
 - 模型把最终表格结果赋值给 result（DataFrame）
 - 模型可赋值 chart（dict）作为 ECharts option，用于前端图表渲染
@@ -26,7 +26,7 @@ import warnings
 
 ALLOWED_IMPORTS = {
     "collections", "datetime", "decimal", "functools", "itertools", "json",
-    "math", "numpy", "pandas", "scipy", "sklearn", "statistics", "statsmodels",
+    "math", "numpy", "pandas", "polars", "duckdb", "pyarrow", "scipy", "sklearn", "statistics", "statsmodels", "seaborn", "plotly", "xgboost",
 }
 FORBIDDEN_NAMES = {
     "ctypes", "ftplib", "http", "os", "pathlib", "requests", "shutil", "socket",
@@ -175,6 +175,30 @@ try:
     import statsmodels
 except ImportError:
     statsmodels = None
+try:
+    import polars
+except ImportError:
+    polars = None
+try:
+    import duckdb
+except ImportError:
+    duckdb = None
+try:
+    import pyarrow
+except ImportError:
+    pyarrow = None
+try:
+    import seaborn
+except ImportError:
+    seaborn = None
+try:
+    import plotly
+except ImportError:
+    plotly = None
+try:
+    import xgboost
+except ImportError:
+    xgboost = None
 
 # 全局压制警告：pandas/numpy/sklearn 等库的 FutureWarning/DeprecationWarning
 # 既避免污染 stderr，也防止模型代码把警告设为 error 后误触发异常
@@ -212,6 +236,8 @@ def _main():
 
     # 1. 按顺序加载所有数据集：df1、df2、……
     env = {"pd": pd, "np": np, "scipy": scipy, "sklearn": sklearn, "statsmodels": statsmodels,
+           "pl": polars, "polars": polars, "duckdb": duckdb, "pyarrow": pyarrow,
+           "seaborn": seaborn, "plotly": plotly, "xgboost": xgboost,
            "__name__": "__analysis__"}
     for i, item in enumerate(manifest, start=1):
         env[f"df{i}"] = load_dataframe(item["path"], item["ext"])

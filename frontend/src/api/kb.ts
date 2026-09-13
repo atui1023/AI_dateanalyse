@@ -7,6 +7,8 @@ export interface Folder {
   system: boolean
   favorite_system?: boolean
   active?: boolean
+  read_only?: boolean
+  shared_workspace_id?: string | null
 }
 
 export interface Document {
@@ -23,6 +25,8 @@ export interface Document {
   source_folder_id?: string
   chunks?: number
   error_msg?: string | null
+  read_only?: boolean
+  shared_workspace_id?: string | null
   created_at?: string
 }
 
@@ -38,6 +42,7 @@ export interface DatasetQuality {
   duplicate_rows: number
   empty_rows: number
   missing_by_column: Record<string, number>
+  outlier_columns?: { column: string; count: number }[]
   issues: QualityIssue[]
 }
 
@@ -95,6 +100,18 @@ export function unmountDocument(docId: string) {
   return request.delete(`/datasets/${docId}`)
 }
 
+export function listMountedDocuments() {
+  return request.get<DatasetMount[]>('/datasets')
+}
+
+export interface DatasetMount {
+  doc_id: string
+  filename: string
+  summary: DatasetSummary
+  path?: string
+  ext?: string
+}
+
 export function toggleDocumentActive(docId: string, active: boolean) {
   return request.patch(`/kb/documents/${docId}/active`, { active })
 }
@@ -113,6 +130,10 @@ export function deleteDocument(docId: string) {
 
 export function retryDocument(docId: string) {
   return request.post(`/kb/documents/${docId}/retry`)
+}
+
+export function cleanDocument(docId: string) {
+  return request.post<UploadResult & { removed_rows: number }>(`/kb/documents/${docId}/clean`)
 }
 
 export interface DocumentVersion {
@@ -135,4 +156,20 @@ export function uploadDocumentVersion(docId: string, file: File) {
 
 export function listDocumentVersions(docId: string) {
   return request.get<DocumentVersion[]>(`/kb/documents/${docId}/versions`)
+}
+
+export function shareDocumentToWorkspace(docId: string, workspaceId: string) {
+  return request.put(`/kb/documents/${docId}/workspace-share`, { workspace_id: workspaceId })
+}
+
+export function unshareDocumentFromWorkspace(docId: string) {
+  return request.delete(`/kb/documents/${docId}/workspace-share`)
+}
+
+export function shareFolderToWorkspace(folderId: string, workspaceId: string) {
+  return request.put(`/kb/folders/${folderId}/workspace-share`, { workspace_id: workspaceId })
+}
+
+export function unshareFolderFromWorkspace(folderId: string) {
+  return request.delete(`/kb/folders/${folderId}/workspace-share`)
 }

@@ -60,6 +60,13 @@ const savedDataSources = ref<any[]>([])
 const qualityDatasetId = ref('')
 const qualityResult = ref<any>(null)
 const qualityBusy = ref(false)
+const forecastDatasetId = ref('')
+const forecastDateColumn = ref('')
+const forecastValueColumn = ref('')
+const forecastHorizon = ref(7)
+const forecastProfile = ref<any>(null)
+const forecastResult = ref<any>(null)
+const forecastBusy = ref(false)
 const remoteSourceType = ref('api')
 const remoteSourceUrl = ref('')
 const remoteSourceName = ref('远程数据快照')
@@ -76,6 +83,15 @@ let dashboardRefreshTimer: number | undefined
 const tableDocs = computed(() => kb.documents.filter((d) => ['.csv', '.xlsx', '.xls'].includes(d.ext)))
 const selectedFirst = computed(() => tableDocs.value.find((d) => d.doc_id === selectedDatasets.value[0]))
 const selectedSecond = computed(() => tableDocs.value.find((d) => d.doc_id === selectedDatasets.value[1]))
+const forecastDateOptions = computed(() => {
+  const columns = forecastProfile.value?.columns_detail || []
+  return [...columns].sort((a: any, b: any) => {
+    const aDate = a.type === 'date' || /日期|时间|date|time/i.test(a.name) ? 0 : 1
+    const bDate = b.type === 'date' || /日期|时间|date|time/i.test(b.name) ? 0 : 1
+    return aDate - bDate
+  }).map((item: any) => item.name)
+})
+const forecastValueOptions = computed(() => forecastProfile.value?.columns_detail?.filter((item: any) => item.mean != null).map((item: any) => item.name) || [])
 const selectedResultItem = computed(() => results.value.find((item) => item.id === selectedResult.value) || null)
 const dashboardDimensionOptions = computed(() => {
   const values = new Set<string>()
@@ -228,6 +244,32 @@ async function inspectDatasetQuality() {
     ElMessage.error(error?.response?.data?.detail || '数据质量检查失败')
   } finally {
     qualityBusy.value = false
+  }
+}
+async function prepareForecastFields() {
+  forecastProfile.value = null
+  forecastResult.value = null
+  forecastDateColumn.value = ''
+  forecastValueColumn.value = ''
+  if (!forecastDatasetId.value) return
+  try {
+    forecastProfile.value = (await api.getDatasetQuality(forecastDatasetId.value)).data
+    forecastDateColumn.value = forecastDateOptions.value[0] || ''
+    forecastValueColumn.value = forecastValueOptions.value[0] || ''
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '字段识别失败，请检查数据集')
+  }
+}
+async function runForecast() {
+  if (!forecastDatasetId.value || !forecastDateColumn.value || !forecastValueColumn.value) return ElMessage.warning('请选择数据集、日期字段和指标字段')
+  forecastBusy.value = true
+  try {
+    forecastResult.value = (await api.forecastDataset(forecastDatasetId.value, { date_column: forecastDateColumn.value, value_column: forecastValueColumn.value, horizon: forecastHorizon.value })).data
+    ElMessage.success('预测分析已完成')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '预测分析失败，请确认日期和指标字段可计算')
+  } finally {
+    forecastBusy.value = false
   }
 }
 async function createAndExecuteRelation() {
@@ -440,6 +482,44 @@ onBeforeUnmount(() => { if (dashboardRefreshTimer) window.clearInterval(dashboar
       <el-tab-pane label="连接模板" name="data-source-templates">
         <div class="tool-grid"><section class="tool-section"><h2>保存连接模板</h2><p class="muted">模板只保存连接地址和账号信息，不保存密码。使用时补充密码后再测试连接。</p><el-input v-model="dataSourceAlias" placeholder="模板名称，例如：生产 MySQL" /><el-button type="primary" @click="saveDataSourceTemplate">保存当前连接信息</el-button></section><section class="tool-section"><h2>已保存模板</h2><el-empty v-if="!savedDataSources.length" description="暂无连接模板" :image-size="50" /><div v-for="item in savedDataSources" :key="item.alias" class="list-row"><div><strong>{{ item.alias }}</strong><small>{{ item.type }} · {{ item.form.host }}:{{ item.form.port }}/{{ item.form.database }}</small></div><div><el-button size="small" @click="useDataSourceTemplate(item)">使用</el-button><el-button size="small" text type="danger" @click="removeDataSourceTemplate(item.alias)">删除</el-button></div></div></section></div>
       </el-tab-pane>
+      <el-tab-pane label="预测分析" name="forecast">
+        <div class="tool-grid">
+          <section class="tool-section">
+            <h2>趋势预测</h2>
+            <p class="muted">选择日期字段和数值指标，基于历史趋势预测未来数据。预测结果只作为辅助判断，不会修改原始数据。</p>
+            <el-select v-model="forecastDatasetId" class="full-control" placeholder="选择数据集" @change="prepareForecastFields">
+              <el-option v-for="d in tableDocs" :key="d.doc_id" :label="d.filename" :value="d.doc_id" />
+            </el-select>
+            <el-select v-model="forecastDateColumn" class="full-control" placeholder="选择日期字段" :disabled="!forecastProfile">
+              <el-option v-for="column in forecastDateOptions" :key="column" :label="column" :value="column" />
+            </el-select>
+            <el-select v-model="forecastValueColumn" class="full-control" placeholder="选择指标字段" :disabled="!forecastProfile">
+              <el-option v-for="column in forecastValueOptions" :key="column" :label="column" :value="column" />
+            </el-select>
+            <div class="inline-actions">
+              <span class="muted">预测周期</span>
+              <el-input-number v-model="forecastHorizon" :min="1" :max="90" />
+              <span class="muted">天</span>
+            </div>
+            <el-button type="primary" :loading="forecastBusy" @click="runForecast">{{ forecastBusy ? '正在预测...' : '开始预测' }}</el-button>
+            <el-alert v-if="forecastProfile && !forecastDateOptions.length" title="没有识别到日期字段，请确认数据包含可解析的日期或时间列" type="warning" :closable="false" />
+            <el-alert v-if="forecastProfile && !forecastValueOptions.length" title="没有识别到数值字段，请确认指标列为数字类型" type="warning" :closable="false" />
+          </section>
+          <section class="tool-section">
+            <h2>预测结果</h2>
+            <el-empty v-if="!forecastResult" description="选择数据集并开始预测" :image-size="50" />
+            <template v-else>
+              <el-alert :title="forecastResult.method + ' · 未来 ' + forecastResult.horizon + ' 天'" type="success" :closable="false" />
+              <div class="quality-summary forecast-summary">
+                <div><small>趋势方向</small><strong>{{ forecastResult.trend }}</strong></div>
+                <div><small>有效样本</small><strong>{{ forecastResult.sample_count }}</strong><span>条</span></div>
+                <div><small>日均变化</small><strong>{{ forecastResult.daily_change }}</strong></div>
+              </div>
+              <ChatMessage role="assistant" text="预测结果已生成，可结合上下界观察趋势变化。" :result="forecastResult" :allow-download="true" />
+            </template>
+          </section>
+        </div>
+      </el-tab-pane>
       <el-tab-pane label="数据质量" name="quality">
         <div class="tool-grid"><section class="tool-section"><h2>数据质量检查</h2><el-select v-model="qualityDatasetId" class="full-control" placeholder="选择数据集"><el-option v-for="d in tableDocs" :key="d.doc_id" :label="d.filename" :value="d.doc_id" /></el-select><el-button type="primary" :loading="qualityBusy" @click="inspectDatasetQuality">开始检查</el-button><p class="muted">检查空值、重复行、异常值、字段类型和基础统计，不会修改原始数据。</p><div v-if="qualityResult" class="quality-summary"><div><small>质量评分</small><strong>{{ qualityResult.quality_score }}</strong><span>/ 100</span></div><div><small>数据行数</small><strong>{{ qualityResult.rows.toLocaleString() }}</strong></div><div><small>字段数量</small><strong>{{ qualityResult.columns }}</strong></div></div></section><section class="tool-section"><h2>检查结果</h2><el-empty v-if="!qualityResult" description="选择数据集后开始检查" :image-size="50" /><template v-else><el-alert v-for="issue in qualityResult.issues" :key="issue.message" :title="issue.message" :type="issue.level === 'success' ? 'success' : issue.level === 'info' ? 'info' : 'warning'" :closable="false" class="quality-alert" /><el-table :data="qualityResult.columns_detail" size="small" border><el-table-column prop="name" label="字段" min-width="120" /><el-table-column prop="type" label="类型" min-width="100" /><el-table-column prop="missing" label="空值" width="70" /><el-table-column prop="missing_rate" label="空值率" width="85"><template #default="scope">{{ scope.row.missing_rate }}%</template></el-table-column><el-table-column prop="unique" label="唯一值" width="85" /><el-table-column label="统计" min-width="190"><template #default="scope"><span v-if="scope.row.mean != null">均值 {{ scope.row.mean }} · 范围 {{ scope.row.min }} ~ {{ scope.row.max }}</span><span v-else class="muted">非数值字段</span></template></el-table-column></el-table></template></section></div>
       </el-tab-pane>
@@ -545,6 +625,8 @@ code { word-break: break-all; color: var(--primary); }
 .quality-summary small { margin: 0 0 6px; }
 .quality-summary strong { margin-right: 4px; font-size: 22px; color: var(--primary); }
 .quality-alert { margin-bottom: 8px; }
+.forecast-summary { margin: 14px 0 4px; }
+.forecast-summary strong { font-size: 18px; }
 @media (max-width: 850px) {
   .tool-grid { grid-template-columns: 1fr; }
   .results-layout { grid-template-columns: 1fr; }

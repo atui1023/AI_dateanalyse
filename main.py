@@ -279,6 +279,59 @@ def dataset_quality(doc_id: str, user: User = Depends(get_current_user)):
             "columns_detail": columns, "issues": issues}
 
 
+@app.post("/datasets/{doc_id}/forecast")
+def dataset_forecast(doc_id: str, payload: dict, user: User = Depends(get_current_user)):
+    try:
+        record = load_dataset_records(user.id, [doc_id])[0]
+        frame = load_dataframe(record["path"], record["ext"])
+    except (ValueError, KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=f"无法读取数据集：{exc}") from exc
+    date_column = str(payload.get("date_column") or "")
+    value_column = str(payload.get("value_column") or "")
+    try:
+        horizon = max(1, min(int(payload.get("horizon") or 7), 90))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="预测周期必须是 1-90 天") from exc
+    if date_column not in frame.columns or value_column not in frame.columns:
+        raise HTTPException(status_code=400, detail="请选择有效的日期字段和指标字段")
+    data = pd.DataFrame({"date": pd.to_datetime(frame[date_column], errors="coerce"), "value": pd.to_numeric(frame[value_column], errors="coerce")}).dropna()
+    if len(data) < 3:
+        raise HTTPException(status_code=400, detail="至少需要 3 条有效的日期和数值记录")
+    data = data.groupby("date", as_index=False)["value"].sum().sort_values("date")
+    if len(data) < 3:
+        raise HTTPException(status_code=400, detail="有效日期不能全部重复")
+    x = list(range(len(data)))
+    y = data["value"].tolist()
+    x_mean = sum(x) / len(x)
+    y_mean = sum(y) / len(y)
+    denominator = sum((item - x_mean) ** 2 for item in x)
+    slope = sum((item - x_mean) * (value - y_mean) for item, value in zip(x, y)) / denominator if denominator else 0
+    intercept = y_mean - slope * x_mean
+    fitted = [intercept + slope * item for item in x]
+    residuals = [actual - predicted for actual, predicted in zip(y, fitted)]
+    residual_std = float(pd.Series(residuals).std(ddof=1)) if len(residuals) > 1 else 0
+    direction = "上升" if slope > 1e-9 else "下降" if slope < -1e-9 else "基本稳定"
+    average_value = sum(y) / len(y)
+    last_date = data["date"].iloc[-1]
+    future = []
+    for step in range(1, horizon + 1):
+        date = last_date + pd.Timedelta(days=step)
+        predicted = max(0, intercept + slope * (len(data) - 1 + step))
+        margin = 1.96 * residual_std * (1 + step / max(1, len(data))) ** 0.5
+        future.append([date.strftime("%Y-%m-%d"), round(float(predicted), 4), round(float(max(0, predicted - margin)), 4), round(float(predicted + margin), 4)])
+    history = [[row["date"].strftime("%Y-%m-%d"), round(float(row["value"]), 4)] for _, row in data.tail(30).iterrows()]
+    return {"dataset_id": doc_id, "filename": record["filename"], "date_column": date_column, "value_column": value_column,
+            "horizon": horizon, "method": "线性趋势回归", "sample_count": len(data), "trend": direction,
+            "average_value": round(float(average_value), 4), "daily_change": round(float(slope), 4),
+            "error_margin": round(float(1.96 * residual_std), 4),
+            "history": {"columns": ["日期", "实际值"], "rows": history},
+            "table": {"columns": ["日期", "预测值", "下界", "上界"], "rows": future},
+            "chart": {"title": {"text": f"{value_column}未来{horizon}天预测"}, "tooltip": {"trigger": "axis"},
+                      "legend": {"data": ["实际值", "预测值"]}, "xAxis": {"type": "category", "data": [row[0] for row in history] + [row[0] for row in future]},
+                      "yAxis": {"type": "value"}, "series": [{"name": "实际值", "type": "line", "data": [row[1] for row in history] + [None] * len(future)},
+                                  {"name": "预测值", "type": "line", "data": [None] * len(history) + [row[1] for row in future]}]}}
+
+
 def _alert_out(row: AlertRecord) -> dict:
     return {
         "id": row.id, "rule_key": row.rule_key, "message": row.message,
@@ -2133,8 +2186,10 @@ def _workflow_write_file(frame: pd.DataFrame, filename: str, user_id: int) -> di
     output_path = os.path.join(KB_DIR, f"{uuid.uuid4().hex}_{safe_name}.csv")
     frame.to_csv(output_path, index=False, encoding="utf-8-sig")
     doc = kb.register_document(output_path, ".csv", f"{safe_name}.csv", user_id=user_id)
+    preview = frame.head(20).fillna("").astype(str)
     return {"doc_id": doc["doc_id"], "filename": doc["filename"], "path": output_path, "ext": ".csv",
-            "summary": build_summary(frame)}
+            "summary": build_summary(frame), "preview": {"columns": [str(column) for column in preview.columns],
+            "rows": preview.values.tolist()}}
 
 
 def _workflow_clean_frame(frame: pd.DataFrame, config: dict) -> pd.DataFrame:
@@ -2529,6 +2584,39 @@ def download_workflow_report(run_id: str, user: User = Depends(get_current_user)
     if os.path.commonpath([report_dir, path]) != report_dir or not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="报告文件不存在")
     return FileResponse(path, filename=os.path.basename(path), media_type="text/html")
+
+
+@app.get("/workflow-runs/{run_id}/export")
+def export_workflow_result(run_id: str, format: str = "csv", user: User = Depends(get_current_user)):
+    with get_session() as db:
+        run = db.query(WorkflowRun).filter(WorkflowRun.id == run_id, WorkflowRun.user_id == user.id).first()
+        if run is None:
+            raise HTTPException(status_code=404, detail="流水线执行记录不存在")
+        outputs = _json_value(run.output_json, {}).get("outputs", {})
+    files = []
+    for value in outputs.values():
+        candidates = value.get("files", []) if isinstance(value, dict) else []
+        if isinstance(value, dict) and value.get("path"):
+            candidates = [value]
+        files.extend(item for item in candidates if isinstance(item, dict) and item.get("path"))
+    if not files:
+        raise HTTPException(status_code=404, detail="该执行记录没有可导出的数据文件")
+    source = files[-1]
+    source_path = os.path.abspath(str(source.get("path") or ""))
+    kb_root = os.path.abspath(KB_DIR)
+    if os.path.commonpath([kb_root, source_path]) != kb_root or not os.path.isfile(source_path):
+        raise HTTPException(status_code=404, detail="结果文件不存在")
+    target_format = str(format or "csv").lower()
+    if target_format == "csv":
+        return FileResponse(source_path, filename=source.get("filename") or os.path.basename(source_path), media_type="text/csv")
+    if target_format != "xlsx":
+        raise HTTPException(status_code=400, detail="仅支持 csv 或 xlsx 导出")
+    frame = load_dataframe(source_path, ".csv")
+    export_dir = os.path.join(UPLOAD_DIR, "exports")
+    os.makedirs(export_dir, exist_ok=True)
+    export_path = os.path.join(export_dir, f"workflow_{run_id}.xlsx")
+    frame.to_excel(export_path, index=False)
+    return FileResponse(export_path, filename=f"{os.path.splitext(source.get('filename') or '流水线结果')[0]}.xlsx", media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @app.post("/workflow-runs/{run_id}/retry")

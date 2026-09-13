@@ -67,6 +67,7 @@ export const listWorkflowRuns = (id: string) => request.get<any[]>('/workflows/'
 export const getWorkflowRun = (id: string) => request.get<any>('/workflow-runs/' + id)
 export const retryWorkflowRun = (id: string) => request.post<any>('/workflow-runs/' + id + '/retry')
 export const workflowReportUrl = (id: string) => '/workflow-runs/' + id + '/report'
+export const workflowExportUrl = (id: string, format: 'csv' | 'xlsx') => '/workflow-runs/' + id + '/export?format=' + format
 export const listDataSourceTypes = () => request.get<DataSourceType[]>('/data-sources/types')
 export const testDataSource = (payload: Record<string, any>) => request.post<any>('/data-sources/test', payload)
 export const previewDataSourceTable = (payload: Record<string, any>) => request.post<any>('/data-sources/preview-table', payload)
@@ -74,5 +75,6 @@ export const importDataSourceTable = (payload: Record<string, any>) => request.p
 export const importRemoteDataSource = (payload: Record<string, any>) => request.post<any>('/data-sources/import', payload)
 export const evaluateAnomalies = (payload: Record<string, any>) => request.post<any>('/analysis/anomalies', payload)
 export const getDatasetQuality = (docId: string) => request.get<any>('/datasets/' + docId + '/quality')
+export const forecastDataset = (docId: string, payload: Record<string, any>) => request.post<any>('/datasets/' + docId + '/forecast', payload)
 export const shareDashboardToWorkspace = (dashboardId: string, workspaceId: string) => request.put('/dashboards/' + dashboardId + '/workspace-share', { workspace_id: workspaceId })
 export const unshareDashboardFromWorkspace = (dashboardId: string) => request.delete('/dashboards/' + dashboardId + '/workspace-share')

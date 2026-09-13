@@ -1,0 +1,40 @@
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-aidataanalysis}
+      MYSQL_USER: ${MYSQL_USER:-aidata}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-aidata}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-aidataanalysis}?charset=utf8mb4
+      STORAGE_DIR: /data/uploads
+      CHROMA_DIR: /data/chroma_db
+    volumes:
+      - app_uploads:/data/uploads
+      - app_chroma:/data/chroma_db
+    ports:
+      - "8000:8000"
+
+volumes:
+  mysql_data:
+  app_uploads:
+  app_chroma:

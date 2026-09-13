@@ -5,7 +5,7 @@ import { useKbStore } from '@/stores/kb'
 import { streamChat, AuthError } from '@/api/chat'
 import { notifyUnauthorized } from '@/api/request'
 import ChatMessage from './ChatMessage.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Send, ClipboardList, Download, Sparkles, RefreshCw } from 'lucide-vue-next'
 
 const sessions = useSessionsStore()
@@ -38,10 +38,31 @@ const analysisTemplates = [
   { key: 'finance', group: '行业模板', label: '财务经营分析', prompt: '请从收入、成本、费用、利润和现金流字段分析经营状况，计算毛利率、净利率和期间变化，识别异常波动并给出经营建议。' },
   { key: 'operations', group: '行业模板', label: '运营效率分析', prompt: '请分析各部门或业务环节的处理量、完成率、耗时和异常数，比较不同团队的效率，定位瓶颈并生成可执行的优化建议。' },
 ]
+const industryTemplates = analysisTemplates.filter((item) => item.group === '行业模板')
+const customTemplates = ref<{ key: string; label: string; prompt: string }[]>([])
 
 function applyAnalysisTemplate(prompt: string) {
   mode.value = 'analysis'
   input.value = prompt
+}
+
+async function saveCurrentTemplate() {
+  const prompt = input.value.trim()
+  if (mode.value !== 'analysis' || !prompt) return ElMessage.warning('请先输入要保存的分析问题')
+  try {
+    const { value } = await ElMessageBox.prompt('给这个分析问题起一个名称', '保存分析模板', { confirmButtonText: '保存', cancelButtonText: '取消', inputPlaceholder: '例如：每周销售复盘', inputValidator: (value) => Boolean(value?.trim()) || '请输入模板名称' })
+    const label = value.trim()
+    customTemplates.value = [{ key: `custom-${Date.now()}`, label, prompt }, ...customTemplates.value.filter((item) => item.label !== label)].slice(0, 12)
+    localStorage.setItem('analysis-custom-templates', JSON.stringify(customTemplates.value))
+    ElMessage.success('分析模板已保存')
+  } catch {
+    // 用户取消保存时不提示错误
+  }
+}
+
+function removeCustomTemplate(key: string) {
+  customTemplates.value = customTemplates.value.filter((item) => item.key !== key)
+  localStorage.setItem('analysis-custom-templates', JSON.stringify(customTemplates.value))
 }
 
 const mountList = computed(() => kb.mounts)
@@ -64,6 +85,10 @@ function useQuickPrompt() {
 }
 
 onMounted(async () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('analysis-custom-templates') || '[]')
+    if (Array.isArray(saved)) customTemplates.value = saved.filter((item) => item?.label && item?.prompt).slice(0, 12)
+  } catch { customTemplates.value = [] }
   if (sessions.currentId && sessions.messages.length) {
     // 历史消息转为渲染格式
     streamMessages.value = sessions.messages.map((m) => ({
@@ -260,6 +285,14 @@ function handleKeydown(e: KeyboardEvent) {
           <el-button plain @click="downloadSampleData"><el-icon><Download /></el-icon>下载示例 CSV</el-button>
           <el-button type="primary" @click="useQuickPrompt"><el-icon><Sparkles /></el-icon>使用趋势模板</el-button>
         </div>
+        <div class="industry-quick-start">
+          <div class="quick-start-title">行业快捷分析</div>
+          <div class="quick-start-grid">
+            <el-button v-for="item in industryTemplates" :key="item.key" plain @click="applyAnalysisTemplate(item.prompt)">
+              {{ item.label }}
+            </el-button>
+          </div>
+        </div>
         <div class="onboarding-next">下一步：在左侧知识库上传并挂载数据集，然后回到这里提问。</div>
       </div>
     </div>
@@ -285,9 +318,19 @@ function handleKeydown(e: KeyboardEvent) {
                   {{ item.label }}
                 </el-dropdown-item>
               </template>
+              <template v-if="customTemplates.length">
+                <el-dropdown-item disabled>我的模板</el-dropdown-item>
+                <el-dropdown-item v-for="item in customTemplates" :key="item.key" :command="item.prompt">{{ item.label }}</el-dropdown-item>
+              </template>
             </el-dropdown-menu>
           </template>
-        </el-dropdown>        <div v-if="mode === 'analysis' && mountList.length" class="mount-list">
+        </el-dropdown>
+        <el-button v-if="mode === 'analysis'" size="small" plain @click="saveCurrentTemplate">保存模板</el-button>
+        <div v-if="mode === 'analysis' && customTemplates.length" class="custom-template-list">
+          <span class="custom-template-label">我的模板：</span>
+          <el-tag v-for="item in customTemplates" :key="item.key" size="small" closable @click="applyAnalysisTemplate(item.prompt)" @close="removeCustomTemplate(item.key)">{{ item.label }}</el-tag>
+        </div>
+        <div v-if="mode === 'analysis' && mountList.length" class="mount-list">
           <el-tag v-for="(m, i) in mountList" :key="m.doc_id" size="small" closable @close="kb.unmountDocument(m.doc_id)">
             df{{ i + 1 }}: {{ m.filename }}
           </el-tag>
@@ -360,11 +403,42 @@ function handleKeydown(e: KeyboardEvent) {
   gap: 10px;
   flex-wrap: wrap;
 }
+.industry-quick-start {
+  margin: 22px auto 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+.quick-start-title {
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.quick-start-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.quick-start-grid .el-button {
+  width: 100%;
+  margin: 0;
+}
 .onboarding-next {
   margin-top: 18px;
   font-size: 12px;
   color: var(--text-tertiary);
 }
+.custom-template-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.custom-template-label {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.custom-template-list .el-tag { cursor: pointer; }
 .retry-action {
   margin: -8px 0 12px 46px;
 }
@@ -422,5 +496,8 @@ function handleKeydown(e: KeyboardEvent) {
 @media (max-width: 640px) {
   .msg-stream { padding: 18px 12px; }
   .input-area { padding: 10px; }
+}
+@media (max-width: 620px) {
+  .quick-start-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>

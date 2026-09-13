@@ -13,6 +13,7 @@
 - **分析工作台**：多数据集关联、仪表盘、自定义分析、分享评论和本地定时任务。
 - **安全执行**：限制分析代码的网络、文件、子进程、执行时间、内存和输出长度。
 - **Windows 兼容**：分析执行器统一使用 UTF-8，支持中文、`✓`、`✅` 等字符。
+- **Docker 部署**：提供应用镜像、MySQL、持久化存储、健康检查和 Compose 启动配置。
 
 ## 技术栈
 
@@ -40,6 +41,7 @@
 | `start_frontend.cmd` | Vite 开发模式入口（热更新） |
 | `stop.bat` | 停止后端服务 |
 | `ROADMAP.md` | 产品发展清单 |
+| `Dockerfile` / `docker-compose.yml` | Linux 服务器一键部署配置 |
 
 ## 环境要求
 
@@ -91,6 +93,17 @@ ANALYSIS_MEMORY_LIMIT_MB=1536
 ```
 
 生产部署时建议将 `STORAGE_DIR` 指向独立持久化磁盘，并使用 `deploy/nginx.conf.example` 配置 HTTPS 反向代理。MySQL 备份演练可先运行 `scripts\backup_mysql.py` 创建快照，再运行 `scripts\verify_mysql_backup.py <备份库名>` 校验表行数；恢复前应先停止应用并完成人工确认。
+
+### Docker 部署
+
+Linux 服务器可以直接使用 Docker Compose 部署。先复制 `deploy/.env.docker.example` 为项目根目录的 `.env`，填写模型、管理员和 MySQL 配置，再执行：
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+默认访问 `http://服务器IP:8000`。详细的 HTTPS、备份、升级和持久化说明见 `deploy/docker-compose.md`。生产环境应使用 Nginx 或云负载均衡终止 HTTPS，并限制 8000 端口只允许内网访问。
 
 工作台的“数据源”页可选择 MySQL 并测试外部数据库连接，连接测试只执行 `SELECT 1`，同时返回可读取的表名列表，不会保存数据库密码或修改外部数据。PostgreSQL 和 SQL Server 已预留连接器，分别按需安装 `psycopg2-binary` 或 `pyodbc` 后接入。
 
